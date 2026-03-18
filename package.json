@@ -1,6 +1,6 @@
 {
   "name": "@icib.dev/api-client",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Strictly-typed TypeScript API client for ICIB API",
   "type": "module",
   "main": "./dist/api/index.js",
