@@ -371,18 +371,19 @@ function generateContextFile(
     `// Auto-generated API client for context: ${tag}`,
     "",
     hasBlobOps
-      ? `import { client, triggerBlobDownload, type BlobDownloadOptions } from "../client.js";`
+      ? `import { client, triggerBlobDownload, type BlobDownloadOptions, type BlobDownloadHeaders } from "../client.js";`
       : `import { client } from "../client.js";`,
     "",
   ];
 
   const usedTypes = new Set<string>();
+  const builtins = new Set(["Blob", "Array", "Record"]);
   const addUsedType = (t: string) => {
-    if (t === "unknown") return;
+    if (t === "unknown" || builtins.has(t)) return;
     const match = t.match(/^([A-Z][a-zA-Z0-9]*)/);
-    if (match) usedTypes.add(match[1]);
+    if (match && !builtins.has(match[1])) usedTypes.add(match[1]);
     const arrMatch = t.match(/Array<([A-Z][a-zA-Z0-9]*)>/);
-    if (arrMatch) usedTypes.add(arrMatch[1]);
+    if (arrMatch && !builtins.has(arrMatch[1])) usedTypes.add(arrMatch[1]);
   };
   for (const op of operations) {
     if (op.bodyParam) addUsedType(schemaToTsType(op.bodyParam.schema, definitions));
@@ -456,7 +457,7 @@ function generateContextFile(
           lines.push(`  const res = await client.${op.method}<Blob>(${pathExpr}, data, { responseType: "blob" });`);
         }
       }
-      lines.push(`  if (options?.download) triggerBlobDownload(res.data, res.headers, options.filename);`);
+      lines.push(`  if (options?.download) triggerBlobDownload(res.data, res.headers as BlobDownloadHeaders, options.filename);`);
       lines.push(`  return res;`);
     } else if (op.method === "get" || op.method === "delete") {
       if (op.pathParams.length > 0 && op.queryParams.length > 0) {
@@ -486,7 +487,7 @@ function generateContextFile(
 
 function generateClient(baseUrl: string): string {
   return `// Auto-generated Axios client
-import axios, { type AxiosInstance, type AxiosResponse } from "axios";
+import axios, { type AxiosInstance } from "axios";
 
 let _token: string | null = null;
 
@@ -516,17 +517,26 @@ export interface BlobDownloadOptions {
   filename?: string;
 }
 
+/** Headers type for blob download (compatible with Axios response headers) */
+export type BlobDownloadHeaders =
+  | import("axios").AxiosResponseHeaders
+  | import("axios").RawAxiosResponseHeaders
+  | Record<string, import("axios").AxiosHeaderValue>;
+
 /** Triggers a blob download in the browser. No-op in Node.js. */
 export function triggerBlobDownload(
   blob: Blob,
-  headers: Record<string, string> | { get?: (name: string) => string | null },
+  headers: BlobDownloadHeaders,
   suggestedFilename?: string
 ): void {
   if (typeof document === "undefined") return;
-  const cd = typeof headers.get === "function" ? headers.get("content-disposition") : headers["content-disposition"];
+  const cdRaw = "get" in headers && typeof (headers as import("axios").AxiosHeaders).get === "function"
+    ? (headers as import("axios").AxiosHeaders).get("content-disposition")
+    : (headers as Record<string, import("axios").AxiosHeaderValue>)["content-disposition"];
+  const cd = typeof cdRaw === "string" ? cdRaw : Array.isArray(cdRaw) ? cdRaw[0] : "";
   const filename =
     suggestedFilename ??
-    (typeof cd === "string" && cd.includes("filename=")
+    (cd && cd.includes("filename=")
       ? cd.split("filename=")[1]?.replace(/^["']|["']$/g, "").trim()
       : "download");
   const url = URL.createObjectURL(blob);

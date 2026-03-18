@@ -42,6 +42,22 @@ const res = await allegatiList({ page: 1, size: 10 });
 const detail = await allegatiRead({ id: res.data.results[0].id });
 ```
 
+### Blob / file download endpoints
+
+Endpoints that return files (CSV, PDF, etc.) are detected from the spec (description, path patterns like `/download/`, `x-response-type: blob`). They return `Blob` and support `download: true` to trigger a browser download:
+
+```typescript
+import { qrcodeDownloadUnassigned, qrcodeGenerateCsv } from "./api/index.js";
+
+// Get blob in response.data
+const res = await qrcodeDownloadUnassigned({ page: 1, size: 100 });
+const csvBlob = res.data; // Blob
+
+// Auto-download in browser
+await qrcodeDownloadUnassigned({}, { download: true });
+await qrcodeGenerateCsv({ n: 10 }, { download: true, filename: "qrcodes.csv" });
+```
+
 ---
 
 # PostgreSQL Database Sync
