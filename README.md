@@ -1,10 +1,29 @@
-# Generate API Client
+# @icib.dev/api-client
 
-Generate a strictly-typed TypeScript API client from Swagger/OpenAPI docs, using Axios and organized by context (tags).
+Strictly-typed TypeScript API client for the ICIB/GSS API, built with Axios and organized by context (tags).
 
-## API Client Generator
+## Install
 
-### Usage
+```bash
+npm install @icib.dev/api-client
+```
+
+## Quick Start
+
+```typescript
+import { setAuthToken, apiClient } from "@icib.dev/api-client";
+
+// Set your auth token (e.g. from env)
+setAuthToken(process.env.API_TOKEN);
+
+// Use the API - fully typed!
+const res = await apiClient.allegati.list({ page: 1, size: 10 });
+const detail = await apiClient.allegati.read({ id: res.data.results[0].id });
+```
+
+## API Client Generator (for maintainers)
+
+To regenerate the client from the OpenAPI spec:
 
 ```bash
 npm run generate
@@ -31,18 +50,6 @@ api/
 └── index.ts           # Re-exports all contexts and types
 ```
 
-### Using the generated client
-
-```typescript
-import { setAuthToken, apiClient } from "./api/index.js";
-
-setAuthToken(process.env.API_TOKEN);
-
-// Nested structure: apiClient.<context>.<method>()
-const res = await apiClient.allegati.list({ page: 1, size: 10 });
-const detail = await apiClient.allegati.read({ id: res.data.results[0].id });
-```
-
 ### JSDoc documentation
 
 The generated client includes JSDoc comments from the OpenAPI spec:
@@ -57,7 +64,7 @@ The generated client includes JSDoc comments from the OpenAPI spec:
 Endpoints that return files (CSV, PDF, etc.) are detected from the spec (description, path patterns like `/download/`, `x-response-type: blob`). They return `Blob` and support `download: true` to trigger a browser download:
 
 ```typescript
-import { apiClient } from "./api/index.js";
+import { apiClient } from "@icib.dev/api-client";
 
 // Get blob in response.data
 const res = await apiClient.QR_Code.downloadUnassigned({ page: 1, size: 100 });
@@ -70,3 +77,13 @@ await apiClient.QR_Code.generateCsv(
   { download: true, filename: "qrcodes.csv" },
 );
 ```
+
+## Publishing
+
+To publish to npm under the `@icib.dev` scope:
+
+1. Ensure you're logged in: `npm login`
+2. Create the org if needed: `npm org create icib.dev` (or add your user to it)
+3. Publish: `npm publish --access public`
+
+The `prepublishOnly` script will automatically run `generate` and `build` before publishing.

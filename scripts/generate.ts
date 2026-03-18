@@ -436,13 +436,21 @@ function generateContextFile(
   tagDescription?: string
 ): string {
   const ctxName = sanitizeContextName(tag);
+  const exportName = contextToIdentifier(tag);
+  const clientVar = exportName === "client" ? "httpClient" : "client";
   const hasBlobOps = operations.some((o) => o.producesBlob);
+  const clientImport =
+    exportName === "client"
+      ? hasBlobOps
+        ? `import { client as httpClient, triggerBlobDownload, type BlobDownloadOptions, type BlobDownloadHeaders } from "../client.js";`
+        : `import { client as httpClient } from "../client.js";`
+      : hasBlobOps
+        ? `import { client, triggerBlobDownload, type BlobDownloadOptions, type BlobDownloadHeaders } from "../client.js";`
+        : `import { client } from "../client.js";`;
   const lines: string[] = [
     `// Auto-generated API client for context: ${tag}`,
     "",
-    hasBlobOps
-      ? `import { client, triggerBlobDownload, type BlobDownloadOptions, type BlobDownloadHeaders } from "../client.js";`
-      : `import { client } from "../client.js";`,
+    clientImport,
     "",
   ];
 
@@ -496,7 +504,12 @@ function generateContextFile(
     const paramsRequired = op.pathParams.length > 0;
     const paramsArg = hasParams ? `params${paramsRequired ? "" : "?"}: ${paramsType}` : "";
 
-    const bodyArg = op.bodyParam ? `data: ${schemaToTsType(op.bodyParam.schema, definitions)}` : "";
+    const needsBody = op.method !== "get" && op.method !== "delete";
+    const bodyArg = op.bodyParam
+      ? `data: ${schemaToTsType(op.bodyParam.schema, definitions)}`
+      : needsBody
+        ? `data?: FormData | Record<string, unknown>`
+        : "";
     const optionsArg = op.producesBlob ? `options?: BlobDownloadOptions` : "";
     const args = [paramsArg, bodyArg, optionsArg].filter(Boolean).join(", ");
 
@@ -551,23 +564,25 @@ function generateContextFile(
     }
     methodLines.push(`    async ${methodName}(${args}) {`);
 
+    const http = clientVar;
     if (op.producesBlob) {
       if (op.method === "get" || op.method === "delete") {
         if (op.pathParams.length > 0 && op.queryParams.length > 0) {
           methodLines.push(`      const { ${pathParamNames.join(", ")}, ...query } = params ?? {};`);
-          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params: query });`);
+          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params: query });`);
         } else if (op.pathParams.length > 0) {
-          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
+          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
         } else if (op.queryParams.length > 0) {
-          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params });`);
+          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params });`);
         } else {
-          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
+          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
         }
       } else {
+        const bodyVal = op.bodyParam || needsBody ? "data" : "undefined";
         if (op.pathParams.length > 0) {
-          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, data, { responseType: "blob" });`);
+          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`);
         } else {
-          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, data, { responseType: "blob" });`);
+          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`);
         }
       }
       methodLines.push(`      if (options?.download) triggerBlobDownload(res.data, res.headers as BlobDownloadHeaders, options.filename);`);
@@ -575,19 +590,20 @@ function generateContextFile(
     } else if (op.method === "get" || op.method === "delete") {
       if (op.pathParams.length > 0 && op.queryParams.length > 0) {
         methodLines.push(`      const { ${pathParamNames.join(", ")}, ...query } = params;`);
-        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr}, { params: query });`);
+        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, { params: query });`);
       } else if (op.pathParams.length > 0) {
-        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr});`);
+        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr});`);
       } else if (op.queryParams.length > 0) {
-        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr}, { params });`);
+        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, { params });`);
       } else {
-        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr});`);
+        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr});`);
       }
     } else {
+      const bodyArg = (op.bodyParam || needsBody) ? ", data" : "";
       if (op.pathParams.length > 0) {
-        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr}, data);`);
+        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodyArg});`);
       } else {
-        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr}, data);`);
+        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodyArg});`);
       }
     }
 
@@ -595,7 +611,6 @@ function generateContextFile(
     methodEntries.push(methodLines.join("\n"));
   }
 
-  const exportName = contextToIdentifier(tag);
   const contextDesc = tagDescription ? jsdocEscape(tagDescription) : `API client for ${tag} endpoints`;
   lines.push(`/** ${contextDesc} */`);
   lines.push(`export const ${exportName} = {`);

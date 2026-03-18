@@ -1,0 +1,9 @@
+# Development files - only dist/ is published (see "files" in package.json)
+scripts/
+example-usage.ts
+tsconfig.json
+tsconfig.build.json
+.git/
+.gitignore
+*.md
+!README.md
