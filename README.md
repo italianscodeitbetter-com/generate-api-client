@@ -36,7 +36,7 @@ api/
 ```typescript
 import { setAuthToken, apiClient } from "./api/index.js";
 
-setAuthToken(process.env.GSS_API_TOKEN);
+setAuthToken(process.env.API_TOKEN);
 
 // Nested structure: apiClient.<context>.<method>()
 const res = await apiClient.allegati.list({ page: 1, size: 10 });
@@ -56,7 +56,10 @@ const csvBlob = res.data; // Blob
 
 // Auto-download in browser
 await apiClient.QR_Code.downloadUnassigned({}, { download: true });
-await apiClient.QR_Code.generateCsv({ n: 10 }, { download: true, filename: "qrcodes.csv" });
+await apiClient.QR_Code.generateCsv(
+  { n: 10 },
+  { download: true, filename: "qrcodes.csv" },
+);
 ```
 
 ---
@@ -70,11 +73,13 @@ This script syncs a PostgreSQL database from a source to a target using `pg_dump
 ### Using Docker
 
 Build the Docker image:
+
 ```bash
 docker build -t postgres-sync .
 ```
 
 Run the sync:
+
 ```bash
 docker run --rm \
   -e SOURCE_DB_URL="postgresql://user:password@host:port/database" \
@@ -85,11 +90,13 @@ docker run --rm \
 ### Using the script directly
 
 Make the script executable:
+
 ```bash
 chmod +x sync.sh
 ```
 
 Run with environment variables:
+
 ```bash
 SOURCE_DB_URL="postgresql://user:password@host:port/database" \
 TARGET_DB_URL="postgresql://user:password@host:port/database" \
