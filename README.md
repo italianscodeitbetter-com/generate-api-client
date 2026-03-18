@@ -1,29 +1,41 @@
 # @icib.dev/api-client
 
-Strictly-typed TypeScript API client for the ICIB API, built with Axios and organized by context (tags).
+Generator for strictly-typed TypeScript API clients from OpenAPI specs. The client is generated in your project—nothing is published to npm.
 
 ## Install
 
 ```bash
-npm install @icib.dev/api-client
+npm install @icib.dev/api-client axios
 ```
 
 ## Quick Start
 
+1. Generate the client in your project:
+
+```bash
+npx api-client-generate
+```
+
+2. Import from your generated client:
+
 ```typescript
-import { setAuthToken, apiClient } from "@icib.dev/api-client";
+import { setAuthToken, apiClient } from "./api";  // or your --out path
 
-// Set your auth token (e.g. from env)
 setAuthToken(process.env.API_TOKEN);
-
-// Use the API - fully typed!
 const res = await apiClient.allegati.list({ page: 1, size: 10 });
-const detail = await apiClient.allegati.read({ id: res.data.results[0].id });
+```
+
+3. Add verify to your build (fails if docs changed or client was modified):
+
+```json
+{
+  "scripts": {
+    "build": "api-client-verify && tsc"
+  }
+}
 ```
 
 ## API Client Generator
-
-To regenerate the client from the OpenAPI spec.
 
 ### From consuming apps (npx)
 
@@ -78,7 +90,7 @@ api/
 
 ### Hash verification
 
-The build verifies that the generated client matches the current OpenAPI docs. When you run `npm run build`, it:
+Add `api-client-verify` before your build to ensure the generated client matches the current OpenAPI docs. When you run your build, it:
 
 1. Reads the manifest (created by `generate`)
 2. Fetches the current docs and compares their hash
@@ -106,7 +118,7 @@ The generated client includes JSDoc comments from the OpenAPI spec:
 Endpoints that return files (CSV, PDF, etc.) are detected from the spec (description, path patterns like `/download/`, `x-response-type: blob`). They return `Blob` and support `download: true` to trigger a browser download:
 
 ```typescript
-import { apiClient } from "@icib.dev/api-client";
+import { apiClient } from "./api";
 
 // Get blob in response.data
 const res = await apiClient.QR_Code.downloadUnassigned({ page: 1, size: 100 });

@@ -1,33 +1,25 @@
 {
   "name": "@icib.dev/api-client",
   "version": "1.0.6",
-  "description": "Strictly-typed TypeScript API client for ICIB API",
+  "description": "Generator for strictly-typed TypeScript API clients from OpenAPI specs",
   "type": "module",
-  "main": "./dist/api/index.js",
-  "types": "./dist/api/index.d.ts",
   "bin": {
-    "api-client-generate": "./dist/scripts/generate.js"
-  },
-  "exports": {
-    ".": {
-      "types": "./dist/api/index.d.ts",
-      "import": "./dist/api/index.js",
-      "default": "./dist/api/index.js"
-    }
+    "api-client-generate": "./dist/scripts/generate.js",
+    "api-client-verify": "./dist/scripts/verify.js"
   },
   "files": [
-    "dist"
+    "dist/scripts"
   ],
   "scripts": {
     "generate": "tsx scripts/generate.ts",
-    "build": "tsx scripts/verify.ts && tsc -p tsconfig.build.json && tsc -p tsconfig.scripts.json",
+    "build": "tsc -p tsconfig.scripts.json",
+    "build:full": "tsx scripts/verify.ts && tsc -p tsconfig.build.json && tsc -p tsconfig.scripts.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@apidevtools/swagger-parser": "^12.1.0",
-    "axios": "^1.13.6"
+    "@apidevtools/swagger-parser": "^12.1.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
