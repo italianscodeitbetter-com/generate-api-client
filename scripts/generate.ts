@@ -770,12 +770,23 @@ function generateContextFile(
 
 function generateClient(baseUrl: string): string {
   return `// Auto-generated Axios client
-import axios, { type AxiosInstance } from "axios";
+import axios, { type AxiosInstance, AxiosError } from "axios";
 
 let _token: string | null = null;
 
-export function setAuthToken(token: string | null): void {
+export function setAuthToken(token: string | null, callback?: (token: string | null) => void): void {
   _token = token;
+  if (callback) callback(token);
+  // insert your own logic here, e.g. save to localStorage, sessionStorage, etc.
+}
+
+export function getAuthToken(): string | null {
+  return _token;
+}
+
+export function clearAuthToken(): void {
+  _token = null;
+  // insert your own logic here
 }
 
 export const client: AxiosInstance = axios.create({
@@ -791,6 +802,21 @@ client.interceptors.request.use((config) => {
   }
   return config;
 });
+
+client.interceptors.response.use(
+  (response) => {
+    if (response.status === 401) {
+      clearAuthToken();
+    }
+    return response.data;
+  },
+  (error) => {
+    if (error.response.status === 401) {
+      clearAuthToken();
+    }
+    return AxiosError.from(error);
+  },
+);
 
 /** Options for blob/download endpoints */
 export interface BlobDownloadOptions {
@@ -880,15 +906,20 @@ interface Manifest {
 }
 
 async function main(): Promise<void> {
-  const { url, out, basePath: basePathOverride, baseUrl: baseUrlOverride } =
-    parseArgs();
+  const {
+    url,
+    out,
+    basePath: basePathOverride,
+    baseUrl: baseUrlOverride,
+  } = parseArgs();
   console.log(`Fetching spec from ${url}...`);
 
   const rawSpec = await loadRawSpec(url);
   const doc = await parseSpec(rawSpec);
   const baseUrl = (() => {
     const override = baseUrlOverride ?? process.env.BASE_URL;
-    if (override) return getOriginFromUrl(override) ?? override.replace(/\/$/, "");
+    if (override)
+      return getOriginFromUrl(override) ?? override.replace(/\/$/, "");
     if (url.startsWith("http://") || url.startsWith("https://")) {
       return getOriginFromUrl(url) ?? getOrigin(doc);
     }
