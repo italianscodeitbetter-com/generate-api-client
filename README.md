@@ -45,6 +45,10 @@ BASE_URL=https://api.example.com npx api-client-generate --out api
 # Custom base path (default empty; when set, included in axios baseURL)
 npx api-client-generate --base-path /v1/api
 BASE_PATH=/v2 npx api-client-generate
+
+# Custom client base URL (default: from spec URL, BASE_URL, or spec host)
+npx api-client-generate --base-url https://api.mycompany.com
+BASE_URL=https://api.mycompany.com npx api-client-generate
 ```
 
 The client is generated in your project directory (e.g. `./api/`).

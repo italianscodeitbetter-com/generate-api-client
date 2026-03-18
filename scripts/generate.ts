@@ -66,6 +66,7 @@ interface CliArgs {
   url: string;
   out: string;
   basePath?: string;
+  baseUrl?: string;
 }
 
 function parseArgs(): CliArgs {
@@ -73,6 +74,7 @@ function parseArgs(): CliArgs {
   let url = getDefaultUrl();
   let out = DEFAULT_OUT;
   let basePath: string | undefined = process.env.BASE_PATH;
+  let baseUrl: string | undefined = process.env.BASE_URL;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--url" && args[i + 1]) {
@@ -84,10 +86,15 @@ function parseArgs(): CliArgs {
       args[i + 1]
     ) {
       basePath = args[++i];
+    } else if (
+      (args[i] === "--base-url" || args[i] === "--baseUrl") &&
+      args[i + 1]
+    ) {
+      baseUrl = args[++i];
     }
   }
 
-  return { url, out, basePath };
+  return { url, out, basePath, baseUrl };
 }
 
 async function fetchSpec(url: string): Promise<unknown> {
@@ -139,7 +146,7 @@ function getBaseUrl(doc: ParsedSpec): string {
   return "https://api.icib.dev/api";
 }
 
-/** Returns origin only (no basePath) for axios baseURL when path includes basePath */
+/** Returns origin only (no basePath) for axios baseURL */
 function getOrigin(doc: ParsedSpec): string {
   const oas2 = doc as { host?: string; schemes?: string[] };
   if (oas2.host) {
@@ -147,6 +154,16 @@ function getOrigin(doc: ParsedSpec): string {
     return `${scheme}://${oas2.host}`;
   }
   return "https://api.icib.dev";
+}
+
+/** Extract origin (protocol + host) from a URL string */
+function getOriginFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return null;
+  }
 }
 
 function getDefinitions(doc: ParsedSpec): Record<string, SchemaObject> {
@@ -863,12 +880,20 @@ interface Manifest {
 }
 
 async function main(): Promise<void> {
-  const { url, out, basePath: basePathOverride } = parseArgs();
+  const { url, out, basePath: basePathOverride, baseUrl: baseUrlOverride } =
+    parseArgs();
   console.log(`Fetching spec from ${url}...`);
 
   const rawSpec = await loadRawSpec(url);
   const doc = await parseSpec(rawSpec);
-  const baseUrl = getOrigin(doc);
+  const baseUrl = (() => {
+    const override = baseUrlOverride ?? process.env.BASE_URL;
+    if (override) return getOriginFromUrl(override) ?? override.replace(/\/$/, "");
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return getOriginFromUrl(url) ?? getOrigin(doc);
+    }
+    return getOrigin(doc);
+  })();
   const basePath = (() => {
     const raw = basePathOverride ?? "";
     if (raw === "") return "";
