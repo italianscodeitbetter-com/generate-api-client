@@ -43,6 +43,14 @@ const res = await apiClient.allegati.list({ page: 1, size: 10 });
 const detail = await apiClient.allegati.read({ id: res.data.results[0].id });
 ```
 
+### JSDoc documentation
+
+The generated client includes JSDoc comments from the OpenAPI spec:
+- **Context/controller**: Description from tag or "API client for X endpoints"
+- **Methods**: Operation `summary` and `description`
+- **Params**: `@param` with descriptions for path params, query params, and body
+- **Types**: Interface and property descriptions when present in the schema
+
 ### Blob / file download endpoints
 
 Endpoints that return files (CSV, PDF, etc.) are detected from the spec (description, path patterns like `/download/`, `x-response-type: blob`). They return `Blob` and support `download: true` to trigger a browser download:
