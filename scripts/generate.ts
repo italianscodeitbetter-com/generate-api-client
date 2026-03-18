@@ -79,7 +79,10 @@ function parseArgs(): CliArgs {
       url = args[++i];
     } else if (args[i] === "--out" && args[i + 1]) {
       out = args[++i];
-    } else if ((args[i] === "--base-path" || args[i] === "--basePath") && args[i + 1]) {
+    } else if (
+      (args[i] === "--base-path" || args[i] === "--basePath") &&
+      args[i + 1]
+    ) {
       basePath = args[++i];
     }
   }
@@ -144,11 +147,6 @@ function getOrigin(doc: ParsedSpec): string {
     return `${scheme}://${oas2.host}`;
   }
   return "https://api.icib.dev";
-}
-
-function getBasePath(doc: ParsedSpec): string {
-  const oas2 = doc as { basePath?: string };
-  return oas2.basePath ?? "";
 }
 
 function getDefinitions(doc: ParsedSpec): Record<string, SchemaObject> {
@@ -286,14 +284,13 @@ interface Operation {
 
 function extractOperations(
   paths: Record<string, PathItem>,
-  basePath: string,
   definitions: Record<string, SchemaObject>,
 ): Operation[] {
   const ops: Operation[] = [];
   const methods = ["get", "post", "put", "patch", "delete"] as const;
 
   for (const [path, pathItem] of Object.entries(paths)) {
-    const fullPath = basePath + (path.startsWith("/") ? path : `/${path}`);
+    const fullPath = path.startsWith("/") ? path : `/${path}`;
 
     for (const method of methods) {
       const op = (pathItem as Record<string, unknown>)[method] as
@@ -873,7 +870,7 @@ async function main(): Promise<void> {
   const doc = await parseSpec(rawSpec);
   const baseUrl = getOrigin(doc);
   const basePath = (() => {
-    const raw = basePathOverride ?? getBasePath(doc);
+    const raw = basePathOverride ?? "";
     if (raw === "") return "";
     return raw.startsWith("/") ? raw : `/${raw}`;
   })();
@@ -885,7 +882,7 @@ async function main(): Promise<void> {
   console.log(`Paths: ${Object.keys(paths).length}`);
   console.log(`Definitions: ${Object.keys(definitions).length}`);
 
-  const ops = extractOperations(paths, basePath, definitions);
+  const ops = extractOperations(paths, definitions);
   const byTag = groupByTag(ops, paths);
 
   const cwd = process.cwd();
@@ -896,8 +893,12 @@ async function main(): Promise<void> {
   mkdirSync(typesDir, { recursive: true });
   mkdirSync(contextsDir, { recursive: true });
 
+  const clientBaseUrl = basePath
+    ? `${baseUrl.replace(/\/$/, "")}${basePath}`
+    : baseUrl;
+
   writeFileSync(join(typesDir, "index.ts"), generateTypes(definitions));
-  writeFileSync(join(outDir, "client.ts"), generateClient(baseUrl));
+  writeFileSync(join(outDir, "client.ts"), generateClient(clientBaseUrl));
 
   const sortedTags = [...byTag.keys()].sort();
   for (const tag of sortedTags) {
