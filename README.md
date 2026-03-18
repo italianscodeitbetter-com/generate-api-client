@@ -37,7 +37,7 @@ npm run generate -- --url https://api.icib.dev/docs/?format=openapi --out api
 
 ### Output
 
-The generator creates an `api/` folder:
+The generator creates an `api/` folder and a local manifest (`api-client.manifest.json`, gitignored):
 
 ```
 api/
@@ -49,6 +49,22 @@ api/
 │   └── ...
 └── index.ts           # Re-exports all contexts and types
 ```
+
+### Hash verification
+
+The build verifies that the generated client matches the current OpenAPI docs. When you run `npm run build`, it:
+
+1. Reads the manifest (created by `generate`)
+2. Fetches the current docs and compares their hash
+3. Hashes the generated client files and compares with the manifest
+
+**If docs changed:** Build fails with:
+> API docs have changed. Run `npm run generate` to regenerate the client, then update your application.
+
+**If client was manually edited:** Build fails with:
+> Generated client files were modified. Run `npm run generate` to regenerate.
+
+**If manifest is missing:** Run `npm run generate` first (e.g. after a fresh clone).
 
 ### JSDoc documentation
 
@@ -77,13 +93,3 @@ await apiClient.QR_Code.generateCsv(
   { download: true, filename: "qrcodes.csv" },
 );
 ```
-
-## Publishing
-
-To publish to npm under the `@icib.dev` scope:
-
-1. Ensure you're logged in: `npm login`
-2. Create the org if needed: `npm org create icib.dev` (or add your user to it)
-3. Publish: `npm publish --access public`
-
-The `prepublishOnly` script will automatically run `generate` and `build` before publishing.

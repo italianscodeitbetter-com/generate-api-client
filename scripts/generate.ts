@@ -4,6 +4,10 @@ import { readFileSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import SwaggerParser from "@apidevtools/swagger-parser";
+import {
+  normalizedJsonHash,
+  computeClientHash,
+} from "./hash.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -11,7 +15,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 interface SchemaObject {
   type?: string;
   $ref?: string;
-  properties?: Record<string, SchemaObject & { description?: string; title?: string }>;
+  properties?: Record<
+    string,
+    SchemaObject & { description?: string; title?: string }
+  >;
   items?: SchemaObject;
   required?: string[];
   format?: string;
@@ -32,7 +39,10 @@ interface OperationObject {
   summary?: string;
   description?: string;
   parameters?: ParameterObject[];
-  responses?: Record<string, { description?: string; schema?: SchemaObject; "x-response-type"?: string }>;
+  responses?: Record<
+    string,
+    { description?: string; schema?: SchemaObject; "x-response-type"?: string }
+  >;
   tags?: string[];
 }
 interface ParameterObject {
@@ -44,7 +54,7 @@ interface ParameterObject {
   schema?: SchemaObject;
 }
 
-const DEFAULT_URL = "https://api-gss.icib.dev/docs/?format=openapi";
+const DEFAULT_URL = "https://api.icib.dev/docs/?format=openapi";
 const DEFAULT_OUT = "api";
 
 interface CliArgs {
@@ -76,17 +86,17 @@ async function fetchSpec(url: string): Promise<unknown> {
   return res.json();
 }
 
-async function loadAndParseSpec(urlOrPath: string): Promise<ParsedSpec> {
-  let spec: unknown;
-
+async function loadRawSpec(urlOrPath: string): Promise<unknown> {
   if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) {
-    spec = await fetchSpec(urlOrPath);
-  } else {
-    spec = JSON.parse(readFileSync(urlOrPath, "utf-8"));
+    return fetchSpec(urlOrPath);
   }
+  return JSON.parse(readFileSync(urlOrPath, "utf-8"));
+}
 
-  const parsed = (await SwaggerParser.parse(spec as Parameters<typeof SwaggerParser.parse>[0])) as ParsedSpec;
-  return parsed;
+async function parseSpec(spec: unknown): Promise<ParsedSpec> {
+  return (await SwaggerParser.parse(
+    spec as Parameters<typeof SwaggerParser.parse>[0],
+  )) as ParsedSpec;
 }
 
 interface ParsedSpec {
@@ -114,7 +124,7 @@ function getBaseUrl(doc: ParsedSpec): string {
     return oas3.servers[0].url.replace(/\/$/, "");
   }
 
-  return "https://api-gss.icib.dev/api";
+  return "https://api.icib.dev/api";
 }
 
 /** Returns origin only (no basePath) for axios baseURL when path includes basePath */
@@ -124,7 +134,7 @@ function getOrigin(doc: ParsedSpec): string {
     const scheme = oas2.schemes?.[0] ?? "https";
     return `${scheme}://${oas2.host}`;
   }
-  return "https://api-gss.icib.dev";
+  return "https://api.icib.dev";
 }
 
 function getBasePath(doc: ParsedSpec): string {
@@ -143,13 +153,15 @@ function getPaths(doc: ParsedSpec): Record<string, PathItem> {
 function schemaToTsType(
   schema: SchemaObject | undefined,
   definitions: Record<string, SchemaObject>,
-  refsSeen: Set<string> = new Set()
+  refsSeen: Set<string> = new Set(),
 ): string {
   if (!schema) return "unknown";
 
   const ref = schema.$ref;
   if (ref) {
-    const match = ref.match(/#\/definitions\/(.+)$/) ?? ref.match(/#\/components\/schemas\/(.+)$/);
+    const match =
+      ref.match(/#\/definitions\/(.+)$/) ??
+      ref.match(/#\/components\/schemas\/(.+)$/);
     const name = match?.[1];
     if (name && !refsSeen.has(name)) {
       refsSeen.add(name);
@@ -193,7 +205,10 @@ function schemaToTsType(
 }
 
 function generateTypes(definitions: Record<string, SchemaObject>): string {
-  const lines: string[] = ["// Auto-generated types from OpenAPI definitions", ""];
+  const lines: string[] = [
+    "// Auto-generated types from OpenAPI definitions",
+    "",
+  ];
 
   for (const [name, schema] of Object.entries(definitions)) {
     const s = schema as SchemaObject;
@@ -205,7 +220,10 @@ function generateTypes(definitions: Record<string, SchemaObject>): string {
       for (const [propName, propSchema] of Object.entries(s.properties)) {
         const optional = !required.has(propName);
         const t = schemaToTsType(propSchema as SchemaObject, definitions);
-        const desc = (propSchema as { description?: string; title?: string }).description ?? (propSchema as { description?: string; title?: string }).title;
+        const desc =
+          (propSchema as { description?: string; title?: string })
+            .description ??
+          (propSchema as { description?: string; title?: string }).title;
         if (desc) {
           props.push(`  /** ${jsdocEscape(desc)} */`);
         }
@@ -240,8 +258,17 @@ interface Operation {
   method: string;
   path: string;
   pathParams: Array<{ name: string; description?: string }>;
-  queryParams: Array<{ name: string; required: boolean; schema: SchemaObject; description?: string }>;
-  bodyParam: { name: string; schema: SchemaObject; propertyDescriptions?: Record<string, string> } | null;
+  queryParams: Array<{
+    name: string;
+    required: boolean;
+    schema: SchemaObject;
+    description?: string;
+  }>;
+  bodyParam: {
+    name: string;
+    schema: SchemaObject;
+    propertyDescriptions?: Record<string, string>;
+  } | null;
   responseType: string;
   producesBlob: boolean;
   summary?: string;
@@ -251,7 +278,7 @@ interface Operation {
 function extractOperations(
   paths: Record<string, PathItem>,
   basePath: string,
-  definitions: Record<string, SchemaObject>
+  definitions: Record<string, SchemaObject>,
 ): Operation[] {
   const ops: Operation[] = [];
   const methods = ["get", "post", "put", "patch", "delete"] as const;
@@ -260,32 +287,52 @@ function extractOperations(
     const fullPath = basePath + (path.startsWith("/") ? path : `/${path}`);
 
     for (const method of methods) {
-      const op = (pathItem as Record<string, unknown>)[method] as {
-        operationId?: string;
-        summary?: string;
-        description?: string;
-        parameters?: Array<{
-          name: string;
-          in: string;
-          required?: boolean;
-          description?: string;
-          schema?: SchemaObject;
-        }>;
-        responses?: Record<string, { schema?: SchemaObject }>;
-        tags?: string[];
-      } | undefined;
+      const op = (pathItem as Record<string, unknown>)[method] as
+        | {
+            operationId?: string;
+            summary?: string;
+            description?: string;
+            parameters?: Array<{
+              name: string;
+              in: string;
+              required?: boolean;
+              description?: string;
+              schema?: SchemaObject;
+            }>;
+            responses?: Record<string, { schema?: SchemaObject }>;
+            tags?: string[];
+          }
+        | undefined;
 
       if (!op?.operationId) continue;
 
       const pathParamsMap = new Map<string, string>();
-      const queryParams: Array<{ name: string; required: boolean; schema: SchemaObject; description?: string }> = [];
-      let bodyParam: { name: string; schema: SchemaObject; propertyDescriptions?: Record<string, string> } | null = null;
+      const queryParams: Array<{
+        name: string;
+        required: boolean;
+        schema: SchemaObject;
+        description?: string;
+      }> = [];
+      let bodyParam: {
+        name: string;
+        schema: SchemaObject;
+        propertyDescriptions?: Record<string, string>;
+      } | null = null;
 
-      const pathParamNames = [...(path.match(/\{([^}]+)\}/g) ?? [])].map((m) => m.slice(1, -1));
+      const pathParamNames = [...(path.match(/\{([^}]+)\}/g) ?? [])].map((m) =>
+        m.slice(1, -1),
+      );
       const allParams = [
         ...(pathItem.parameters ?? []),
         ...(op.parameters ?? []),
-      ] as Array<{ name: string; in: string; required?: boolean; description?: string; schema?: SchemaObject; type?: string }>;
+      ] as Array<{
+        name: string;
+        in: string;
+        required?: boolean;
+        description?: string;
+        schema?: SchemaObject;
+        type?: string;
+      }>;
 
       for (const p of allParams) {
         if (p.in === "path") {
@@ -297,7 +344,12 @@ function extractOperations(
       for (const name of pathParamNames) {
         if (!pathParamsMap.has(name)) pathParamsMap.set(name, "");
       }
-      const pathParams = Array.from(pathParamsMap.entries()).map(([name, description]) => ({ name, description: description || undefined }));
+      const pathParams = Array.from(pathParamsMap.entries()).map(
+        ([name, description]) => ({
+          name,
+          description: description || undefined,
+        }),
+      );
 
       for (const p of allParams) {
         if (p.in === "path") continue;
@@ -305,30 +357,43 @@ function extractOperations(
           queryParams.push({
             name: p.name,
             required: p.required ?? false,
-            schema: (p.schema ?? { type: (p as { type?: string }).type ?? "string" }) as SchemaObject,
+            schema: (p.schema ?? {
+              type: (p as { type?: string }).type ?? "string",
+            }) as SchemaObject,
             description: p.description,
           });
         } else if (p.in === "body") {
           const bodySchema = (p.schema ?? { type: "object" }) as SchemaObject;
           const propertyDescriptions: Record<string, string> = {};
           if (bodySchema.properties) {
-            for (const [propName, propSchema] of Object.entries(bodySchema.properties)) {
-              const desc = (propSchema as { description?: string; title?: string }).description ?? (propSchema as { description?: string; title?: string }).title;
+            for (const [propName, propSchema] of Object.entries(
+              bodySchema.properties,
+            )) {
+              const desc =
+                (propSchema as { description?: string; title?: string })
+                  .description ??
+                (propSchema as { description?: string; title?: string }).title;
               if (desc) propertyDescriptions[propName] = desc;
             }
           }
           bodyParam = {
             name: p.name,
             schema: bodySchema,
-            propertyDescriptions: Object.keys(propertyDescriptions).length > 0 ? propertyDescriptions : undefined,
+            propertyDescriptions:
+              Object.keys(propertyDescriptions).length > 0
+                ? propertyDescriptions
+                : undefined,
           };
         }
       }
 
       const successResponse = op.responses?.["200"] ?? op.responses?.["201"];
       const respSchema = successResponse?.schema as SchemaObject | undefined;
-      const respDesc = (successResponse as { description?: string })?.description ?? "";
-      const xResponseType = (successResponse as { "x-response-type"?: string })?.["x-response-type"];
+      const respDesc =
+        (successResponse as { description?: string })?.description ?? "";
+      const xResponseType = (
+        successResponse as { "x-response-type"?: string }
+      )?.["x-response-type"];
       let responseType = "unknown";
       if (respSchema) {
         responseType = schemaToTsType(respSchema, definitions);
@@ -336,8 +401,12 @@ function extractOperations(
 
       const producesBlob =
         xResponseType === "blob" ||
-        /File CSV|File.*CSV|Scarica|download|export|blob|binary/i.test(respDesc) ||
-        /\/download\/|\/export\/|download-unassigned|generate-csv|import_csv|import_csv\/|download-icon/i.test(fullPath);
+        /File CSV|File.*CSV|Scarica|download|export|blob|binary/i.test(
+          respDesc,
+        ) ||
+        /\/download\/|\/export\/|download-unassigned|generate-csv|import_csv|import_csv\/|download-icon/i.test(
+          fullPath,
+        );
 
       ops.push({
         operationId: op.operationId,
@@ -359,7 +428,7 @@ function extractOperations(
 
 function groupByTag(
   ops: Operation[],
-  paths: Record<string, PathItem>
+  paths: Record<string, PathItem>,
 ): Map<string, Operation[]> {
   const byTag = new Map<string, Operation[]>();
 
@@ -367,7 +436,9 @@ function groupByTag(
     let tag = "default";
     for (const [path, pathItem] of Object.entries(paths)) {
       for (const m of ["get", "post", "put", "patch", "delete"] as const) {
-        const o = (pathItem as Record<string, unknown>)[m] as { operationId?: string; tags?: string[] } | undefined;
+        const o = (pathItem as Record<string, unknown>)[m] as
+          | { operationId?: string; tags?: string[] }
+          | undefined;
         if (o?.operationId === op.operationId && o.tags?.[0]) {
           tag = o.tags[0];
           break;
@@ -400,7 +471,9 @@ function operationIdToFunctionName(operationId: string): string {
   if (parts.length <= 1) return sanitizeIdentifier(operationId);
   const [context, ...rest] = parts;
   const contextSafe = sanitizeIdentifier(context);
-  const action = rest.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join("");
+  const action = rest
+    .map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1)))
+    .join("");
   return contextSafe + action.charAt(0).toUpperCase() + action.slice(1);
 }
 
@@ -409,23 +482,25 @@ function operationIdToMethodName(operationId: string): string {
   const parts = operationId.split("_");
   if (parts.length <= 1) return sanitizeIdentifier(operationId);
   const [, ...rest] = parts;
-  return rest.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join("");
+  return rest
+    .map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1)))
+    .join("");
 }
 
 function sanitizeIdentifier(name: string): string {
-  return name.replace(/-([a-z])/g, (_, c) => c.toUpperCase()).replace(/[^a-zA-Z0-9_]/g, "_");
+  return name
+    .replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+    .replace(/[^a-zA-Z0-9_]/g, "_");
 }
 
 /** Escape text for use inside JSDoc (avoid closing comment, handle newlines) */
 function jsdocEscape(text: string): string {
-  return text
-    .replace(/\*\//g, "* /")
-    .replace(/\n/g, " ")
-    .trim();
+  return text.replace(/\*\//g, "* /").replace(/\n/g, " ").trim();
 }
 
 function getTagDescription(doc: ParsedSpec, tag: string): string | undefined {
-  const tags = (doc as { tags?: Array<{ name: string; description?: string }> }).tags;
+  const tags = (doc as { tags?: Array<{ name: string; description?: string }> })
+    .tags;
   return tags?.find((t) => t.name === tag)?.description;
 }
 
@@ -433,7 +508,7 @@ function generateContextFile(
   tag: string,
   operations: Operation[],
   definitions: Record<string, SchemaObject>,
-  tagDescription?: string
+  tagDescription?: string,
 ): string {
   const ctxName = sanitizeContextName(tag);
   const exportName = contextToIdentifier(tag);
@@ -464,13 +539,17 @@ function generateContextFile(
     if (arrMatch && !builtins.has(arrMatch[1])) usedTypes.add(arrMatch[1]);
   };
   for (const op of operations) {
-    if (op.bodyParam) addUsedType(schemaToTsType(op.bodyParam.schema, definitions));
-    for (const q of op.queryParams) addUsedType(schemaToTsType(q.schema, definitions));
+    if (op.bodyParam)
+      addUsedType(schemaToTsType(op.bodyParam.schema, definitions));
+    for (const q of op.queryParams)
+      addUsedType(schemaToTsType(q.schema, definitions));
     addUsedType(op.responseType);
   }
 
   if (usedTypes.size > 0) {
-    lines.push(`import type { ${[...usedTypes].join(", ")} } from "../types/index.js";`);
+    lines.push(
+      `import type { ${[...usedTypes].join(", ")} } from "../types/index.js";`,
+    );
     lines.push("");
   }
 
@@ -499,10 +578,13 @@ function generateContextFile(
     if (pathParamsType) paramsParts.push(pathParamsType);
     if (queryParamsType) paramsParts.push(queryParamsType);
 
-    const paramsType = paramsParts.length > 0 ? paramsParts.join(" & ") : "void";
+    const paramsType =
+      paramsParts.length > 0 ? paramsParts.join(" & ") : "void";
     const hasParams = op.pathParams.length > 0 || op.queryParams.length > 0;
     const paramsRequired = op.pathParams.length > 0;
-    const paramsArg = hasParams ? `params${paramsRequired ? "" : "?"}: ${paramsType}` : "";
+    const paramsArg = hasParams
+      ? `params${paramsRequired ? "" : "?"}: ${paramsType}`
+      : "";
 
     const needsBody = op.method !== "get" && op.method !== "delete";
     const bodyArg = op.bodyParam
@@ -516,7 +598,10 @@ function generateContextFile(
     let pathExpr = `"${op.path}"`;
     const pathParamNames = op.pathParams.map((p) => p.name);
     if (op.pathParams.length > 0) {
-      const repl = op.path.replace(/\{([^}]+)\}/g, (_, name) => `\${String(params.${name})}`);
+      const repl = op.path.replace(
+        /\{([^}]+)\}/g,
+        (_, name) => `\${String(params.${name})}`,
+      );
       pathExpr = "`" + repl + "`";
     }
 
@@ -530,13 +615,17 @@ function generateContextFile(
     }
     if (op.pathParams.length > 0) {
       for (const p of op.pathParams) {
-        const desc = p.description ? jsdocEscape(p.description) : "Path parameter";
+        const desc = p.description
+          ? jsdocEscape(p.description)
+          : "Path parameter";
         jsdocParts.push(`@param params.${p.name} - ${desc}`);
       }
     }
     for (const q of op.queryParams) {
       if (q.description) {
-        jsdocParts.push(`@param params.${q.name} - ${jsdocEscape(q.description)}`);
+        jsdocParts.push(
+          `@param params.${q.name} - ${jsdocEscape(q.description)}`,
+        );
       } else {
         jsdocParts.push(`@param params.${q.name} - Query parameter`);
       }
@@ -550,8 +639,12 @@ function generateContextFile(
       jsdocParts.push(`@param data - ${jsdocEscape(bodyDesc)}`);
     }
     if (op.producesBlob) {
-      jsdocParts.push(`@param options.download - When true, triggers a file download in the browser`);
-      jsdocParts.push(`@param options.filename - Suggested filename for the download`);
+      jsdocParts.push(
+        `@param options.download - When true, triggers a file download in the browser`,
+      );
+      jsdocParts.push(
+        `@param options.filename - Suggested filename for the download`,
+      );
     }
 
     const methodLines: string[] = [];
@@ -568,42 +661,72 @@ function generateContextFile(
     if (op.producesBlob) {
       if (op.method === "get" || op.method === "delete") {
         if (op.pathParams.length > 0 && op.queryParams.length > 0) {
-          methodLines.push(`      const { ${pathParamNames.join(", ")}, ...query } = params ?? {};`);
-          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params: query });`);
+          methodLines.push(
+            `      const { ${pathParamNames.join(", ")}, ...query } = params ?? {};`,
+          );
+          methodLines.push(
+            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params: query });`,
+          );
         } else if (op.pathParams.length > 0) {
-          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
+          methodLines.push(
+            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`,
+          );
         } else if (op.queryParams.length > 0) {
-          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params });`);
+          methodLines.push(
+            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params });`,
+          );
         } else {
-          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
+          methodLines.push(
+            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`,
+          );
         }
       } else {
         const bodyVal = op.bodyParam || needsBody ? "data" : "undefined";
         if (op.pathParams.length > 0) {
-          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`);
+          methodLines.push(
+            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`,
+          );
         } else {
-          methodLines.push(`      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`);
+          methodLines.push(
+            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`,
+          );
         }
       }
-      methodLines.push(`      if (options?.download) triggerBlobDownload(res.data, res.headers as BlobDownloadHeaders, options.filename);`);
+      methodLines.push(
+        `      if (options?.download) triggerBlobDownload(res.data, res.headers as BlobDownloadHeaders, options.filename);`,
+      );
       methodLines.push(`      return res;`);
     } else if (op.method === "get" || op.method === "delete") {
       if (op.pathParams.length > 0 && op.queryParams.length > 0) {
-        methodLines.push(`      const { ${pathParamNames.join(", ")}, ...query } = params;`);
-        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, { params: query });`);
+        methodLines.push(
+          `      const { ${pathParamNames.join(", ")}, ...query } = params;`,
+        );
+        methodLines.push(
+          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, { params: query });`,
+        );
       } else if (op.pathParams.length > 0) {
-        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr});`);
+        methodLines.push(
+          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr});`,
+        );
       } else if (op.queryParams.length > 0) {
-        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, { params });`);
+        methodLines.push(
+          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, { params });`,
+        );
       } else {
-        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr});`);
+        methodLines.push(
+          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr});`,
+        );
       }
     } else {
-      const bodyArg = (op.bodyParam || needsBody) ? ", data" : "";
+      const bodyArg = op.bodyParam || needsBody ? ", data" : "";
       if (op.pathParams.length > 0) {
-        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodyArg});`);
+        methodLines.push(
+          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodyArg});`,
+        );
       } else {
-        methodLines.push(`      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodyArg});`);
+        methodLines.push(
+          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodyArg});`,
+        );
       }
     }
 
@@ -611,7 +734,9 @@ function generateContextFile(
     methodEntries.push(methodLines.join("\n"));
   }
 
-  const contextDesc = tagDescription ? jsdocEscape(tagDescription) : `API client for ${tag} endpoints`;
+  const contextDesc = tagDescription
+    ? jsdocEscape(tagDescription)
+    : `API client for ${tag} endpoints`;
   lines.push(`/** ${contextDesc} */`);
   lines.push(`export const ${exportName} = {`);
   lines.push(methodEntries.join(",\n"));
@@ -689,7 +814,9 @@ function generateApiClient(contextTags: string[]): string {
     file: sanitizeContextName(t),
     id: contextToIdentifier(t),
   }));
-  const imports = entries.map((e) => `import { ${e.id} } from "./contexts/${e.file}.js";`).join("\n");
+  const imports = entries
+    .map((e) => `import { ${e.id} } from "./contexts/${e.file}.js";`)
+    .join("\n");
   const props = entries.map((e) => `  ${e.id}`).join(",\n");
   return `// Auto-generated nested API client
 ${imports}
@@ -713,17 +840,28 @@ function generateIndex(contextTags: string[]): string {
     const ctxFile = sanitizeContextName(tag);
     const ctxId = contextToIdentifier(tag);
     const exportName = reserved.has(ctxId) ? `${ctxId}Context` : ctxId;
-    exports.push(`export { ${ctxId} as ${exportName} } from "./contexts/${ctxFile}.js";`);
+    exports.push(
+      `export { ${ctxId} as ${exportName} } from "./contexts/${ctxFile}.js";`,
+    );
   }
 
   return exports.join("\n");
+}
+
+interface Manifest {
+  docsSource: string;
+  docsHash: string;
+  clientHash: string;
+  out: string;
+  generatedAt: string;
 }
 
 async function main(): Promise<void> {
   const { url, out } = parseArgs();
   console.log(`Fetching spec from ${url}...`);
 
-  const doc = await loadAndParseSpec(url);
+  const rawSpec = await loadRawSpec(url);
+  const doc = await parseSpec(rawSpec);
   const baseUrl = getOrigin(doc);
   const basePath = getBasePath(doc);
   const definitions = getDefinitions(doc);
@@ -736,7 +874,8 @@ async function main(): Promise<void> {
   const ops = extractOperations(paths, basePath, definitions);
   const byTag = groupByTag(ops, paths);
 
-  const outDir = join(process.cwd(), out);
+  const cwd = process.cwd();
+  const outDir = join(cwd, out);
   const typesDir = join(outDir, "types");
   const contextsDir = join(outDir, "contexts");
 
@@ -750,12 +889,31 @@ async function main(): Promise<void> {
   for (const tag of sortedTags) {
     const ctxName = sanitizeContextName(tag);
     const tagDesc = getTagDescription(doc, tag);
-    const content = generateContextFile(tag, byTag.get(tag)!, definitions, tagDesc);
+    const content = generateContextFile(
+      tag,
+      byTag.get(tag)!,
+      definitions,
+      tagDesc,
+    );
     writeFileSync(join(contextsDir, `${ctxName}.ts`), content);
   }
 
   writeFileSync(join(outDir, "apiClient.ts"), generateApiClient(sortedTags));
   writeFileSync(join(outDir, "index.ts"), generateIndex(sortedTags));
+
+  const docsHash = normalizedJsonHash(rawSpec);
+  const clientHash = computeClientHash(cwd, out);
+
+  const manifest: Manifest = {
+    docsSource: url,
+    docsHash,
+    clientHash,
+    out,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const manifestPath = join(cwd, "api-client.manifest.json");
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
   console.log(`Generated API client in ${outDir}`);
   console.log(`  - types/index.ts`);
@@ -763,6 +921,7 @@ async function main(): Promise<void> {
   console.log(`  - apiClient.ts`);
   console.log(`  - contexts/*.ts (${sortedTags.length} files)`);
   console.log(`  - index.ts`);
+  console.log(`  - manifest: ${manifestPath}`);
 }
 
 main().catch((err) => {

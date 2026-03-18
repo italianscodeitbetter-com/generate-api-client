@@ -1,0 +1,29 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Test API", "version": "1.0.0" },
+  "host": "api.example.com",
+  "basePath": "/api",
+  "schemes": ["https"],
+  "paths": {
+    "/items/": {
+      "get": {
+        "operationId": "items_list",
+        "tags": ["items"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/products/": {
+      "get": {
+        "operationId": "products_list",
+        "tags": ["products"],
+        "responses": { "200": { "description": "OK" } }
+      }
+    }
+  },
+  "definitions": {
+    "Item": {
+      "type": "object",
+      "properties": { "id": { "type": "integer" } }
+    }
+  }
+}

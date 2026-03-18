@@ -9,11 +9,11 @@
     "outDir": "dist",
     "rootDir": ".",
     "declaration": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "paths": {
+      "@/*": ["./*"]
+    }
   },
   "include": ["scripts/**/*.ts"],
-  "exclude": ["node_modules", "api"],
-  "paths": {
-    "@/*": ["./*"]
-  }
+  "exclude": ["node_modules", "api"]
 }
