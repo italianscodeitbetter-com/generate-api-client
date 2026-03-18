@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./dist/api/index.js",
   "types": "./dist/api/index.d.ts",
+  "bin": {
+    "api-client-generate": "./dist/scripts/generate.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/api/index.d.ts",
@@ -17,16 +20,16 @@
   ],
   "scripts": {
     "generate": "tsx scripts/generate.ts",
-    "build": "tsx scripts/verify.ts && tsc -p tsconfig.build.json",
+    "build": "tsx scripts/verify.ts && tsc -p tsconfig.build.json && tsc -p tsconfig.scripts.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@apidevtools/swagger-parser": "^10.0.3",
     "axios": "^1.7.0"
   },
   "devDependencies": {
-    "@apidevtools/swagger-parser": "^10.0.3",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",

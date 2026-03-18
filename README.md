@@ -21,21 +21,37 @@ const res = await apiClient.allegati.list({ page: 1, size: 10 });
 const detail = await apiClient.allegati.read({ id: res.data.results[0].id });
 ```
 
-## API Client Generator (for maintainers)
+## API Client Generator
 
-To regenerate the client from the OpenAPI spec:
+To regenerate the client from the OpenAPI spec.
+
+### From consuming apps (npx)
+
+If you use this library in your app, run the generator from your project root:
+
+```bash
+npx api-client-generate
+```
+
+With options:
+
+```bash
+# Custom URL
+npx api-client-generate --url https://api.example.com/docs/openapi --out api
+
+# Using BASE_URL env (default: $BASE_URL/docs/openapi)
+BASE_URL=https://api.example.com npx api-client-generate --out api
+```
+
+The client is generated in your project directory (e.g. `./api/`).
+
+### From the library repo (maintainers)
 
 ```bash
 npm run generate
 ```
 
-By default, the spec URL is `$BASE_URL/docs/openapi` when the `BASE_URL` env variable is set (e.g. `BASE_URL=https://api.example.com`). If unset, it falls back to the ICIB default.
-
-With options:
-
-```bash
-npm run generate -- --url https://api.icib.dev/docs/?format=openapi --out api
-```
+By default, the spec URL is `$BASE_URL/docs/openapi` when the `BASE_URL` env variable is set. If unset, it falls back to the ICIB default.
 
 ### Output
 
