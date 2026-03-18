@@ -29,6 +29,8 @@ To regenerate the client from the OpenAPI spec:
 npm run generate
 ```
 
+By default, the spec URL is `$BASE_URL/docs/openapi` when the `BASE_URL` env variable is set (e.g. `BASE_URL=https://api.example.com`). If unset, it falls back to the ICIB default.
+
 With options:
 
 ```bash

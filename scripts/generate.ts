@@ -54,8 +54,16 @@ interface ParameterObject {
   schema?: SchemaObject;
 }
 
-const DEFAULT_URL = "https://api.icib.dev/docs/?format=openapi";
 const DEFAULT_OUT = "api";
+
+function getDefaultUrl(): string {
+  const base = process.env.BASE_URL;
+  if (base) {
+    const normalized = base.replace(/\/$/, "");
+    return `${normalized}/docs/openapi`;
+  }
+  return "https://api.icib.dev/docs/?format=openapi";
+}
 
 interface CliArgs {
   url: string;
@@ -64,7 +72,7 @@ interface CliArgs {
 
 function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
-  let url = DEFAULT_URL;
+  let url = getDefaultUrl();
   let out = DEFAULT_OUT;
 
   for (let i = 0; i < args.length; i++) {
