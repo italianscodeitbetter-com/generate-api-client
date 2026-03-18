@@ -4,10 +4,7 @@ import { readFileSync, mkdirSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import SwaggerParser from "@apidevtools/swagger-parser";
-import {
-  normalizedJsonHash,
-  computeClientHash,
-} from "./hash.js";
+import { normalizedJsonHash, computeClientHash } from "./hash.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -60,7 +57,7 @@ function getDefaultUrl(): string {
   const base = process.env.BASE_URL;
   if (base) {
     const normalized = base.replace(/\/$/, "");
-    return `${normalized}/docs/openapi`;
+    return `${normalized}/docs/json`;
   }
   return "https://api.icib.dev/docs/?format=openapi";
 }
@@ -68,22 +65,26 @@ function getDefaultUrl(): string {
 interface CliArgs {
   url: string;
   out: string;
+  basePath?: string;
 }
 
 function parseArgs(): CliArgs {
   const args = process.argv.slice(2);
   let url = getDefaultUrl();
   let out = DEFAULT_OUT;
+  let basePath: string | undefined = process.env.BASE_PATH;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--url" && args[i + 1]) {
       url = args[++i];
     } else if (args[i] === "--out" && args[i + 1]) {
       out = args[++i];
+    } else if ((args[i] === "--base-path" || args[i] === "--basePath") && args[i + 1]) {
+      basePath = args[++i];
     }
   }
 
-  return { url, out };
+  return { url, out, basePath };
 }
 
 async function fetchSpec(url: string): Promise<unknown> {
@@ -147,7 +148,7 @@ function getOrigin(doc: ParsedSpec): string {
 
 function getBasePath(doc: ParsedSpec): string {
   const oas2 = doc as { basePath?: string };
-  return oas2.basePath ?? "/api";
+  return oas2.basePath ?? "";
 }
 
 function getDefinitions(doc: ParsedSpec): Record<string, SchemaObject> {
@@ -865,17 +866,22 @@ interface Manifest {
 }
 
 async function main(): Promise<void> {
-  const { url, out } = parseArgs();
+  const { url, out, basePath: basePathOverride } = parseArgs();
   console.log(`Fetching spec from ${url}...`);
 
   const rawSpec = await loadRawSpec(url);
   const doc = await parseSpec(rawSpec);
   const baseUrl = getOrigin(doc);
-  const basePath = getBasePath(doc);
+  const basePath = (() => {
+    const raw = basePathOverride ?? getBasePath(doc);
+    if (raw === "") return "";
+    return raw.startsWith("/") ? raw : `/${raw}`;
+  })();
   const definitions = getDefinitions(doc);
   const paths = getPaths(doc);
 
   console.log(`Base URL: ${baseUrl}`);
+  console.log(`Base path: ${basePath}`);
   console.log(`Paths: ${Object.keys(paths).length}`);
   console.log(`Definitions: ${Object.keys(definitions).length}`);
 

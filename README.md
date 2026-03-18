@@ -41,6 +41,10 @@ npx api-client-generate --url https://api.example.com/docs/openapi --out api
 
 # Using BASE_URL env (default: $BASE_URL/docs/openapi)
 BASE_URL=https://api.example.com npx api-client-generate --out api
+
+# Custom base path (overrides spec; default from spec or empty)
+npx api-client-generate --base-path /v1/api
+BASE_PATH=/v2 npx api-client-generate
 ```
 
 The client is generated in your project directory (e.g. `./api/`).
