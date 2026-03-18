@@ -7,7 +7,7 @@
  * 2. Set GSS_API_TOKEN env var (or call setAuthToken)
  */
 
-import { setAuthToken, allegatiList, allegatiRead } from "./api/index.js";
+import { setAuthToken, apiClient } from "./api/index.js";
 
 async function main() {
   const token = process.env.GSS_API_TOKEN;
@@ -16,12 +16,12 @@ async function main() {
   }
 
   try {
-    const listRes = await allegatiList({ page: 1, size: 10 });
+    const listRes = await apiClient.allegati.list({ page: 1, size: 10 });
     console.log("Allegati count:", listRes.data.count);
     console.log("First result:", listRes.data.results[0]);
 
     if (listRes.data.results[0]?.id) {
-      const detailRes = await allegatiRead({ id: listRes.data.results[0].id });
+      const detailRes = await apiClient.allegati.read({ id: listRes.data.results[0].id });
       console.log("Detail:", detailRes.data);
     }
   } catch (err: unknown) {

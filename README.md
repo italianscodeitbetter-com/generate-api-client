@@ -34,12 +34,13 @@ api/
 ### Using the generated client
 
 ```typescript
-import { setAuthToken, allegatiList, allegatiRead } from "./api/index.js";
+import { setAuthToken, apiClient } from "./api/index.js";
 
 setAuthToken(process.env.GSS_API_TOKEN);
 
-const res = await allegatiList({ page: 1, size: 10 });
-const detail = await allegatiRead({ id: res.data.results[0].id });
+// Nested structure: apiClient.<context>.<method>()
+const res = await apiClient.allegati.list({ page: 1, size: 10 });
+const detail = await apiClient.allegati.read({ id: res.data.results[0].id });
 ```
 
 ### Blob / file download endpoints
@@ -47,15 +48,15 @@ const detail = await allegatiRead({ id: res.data.results[0].id });
 Endpoints that return files (CSV, PDF, etc.) are detected from the spec (description, path patterns like `/download/`, `x-response-type: blob`). They return `Blob` and support `download: true` to trigger a browser download:
 
 ```typescript
-import { qrcodeDownloadUnassigned, qrcodeGenerateCsv } from "./api/index.js";
+import { apiClient } from "./api/index.js";
 
 // Get blob in response.data
-const res = await qrcodeDownloadUnassigned({ page: 1, size: 100 });
+const res = await apiClient.QR_Code.downloadUnassigned({ page: 1, size: 100 });
 const csvBlob = res.data; // Blob
 
 // Auto-download in browser
-await qrcodeDownloadUnassigned({}, { download: true });
-await qrcodeGenerateCsv({ n: 10 }, { download: true, filename: "qrcodes.csv" });
+await apiClient.QR_Code.downloadUnassigned({}, { download: true });
+await apiClient.QR_Code.generateCsv({ n: 10 }, { download: true, filename: "qrcodes.csv" });
 ```
 
 ---

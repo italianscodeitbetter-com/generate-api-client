@@ -343,6 +343,11 @@ function sanitizeContextName(tag: string): string {
   return tag.replace(/[^a-zA-Z0-9_-]/g, "_");
 }
 
+/** Valid JS identifier for context (e.g. building-media -> buildingMedia) */
+function contextToIdentifier(tag: string): string {
+  return sanitizeIdentifier(sanitizeContextName(tag));
+}
+
 function toCamelCase(str: string): string {
   return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 }
@@ -354,6 +359,14 @@ function operationIdToFunctionName(operationId: string): string {
   const contextSafe = sanitizeIdentifier(context);
   const action = rest.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join("");
   return contextSafe + action.charAt(0).toUpperCase() + action.slice(1);
+}
+
+/** Extract method name from operationId (e.g. allegati_list -> list, allegati_partial_update -> partialUpdate) */
+function operationIdToMethodName(operationId: string): string {
+  const parts = operationId.split("_");
+  if (parts.length <= 1) return sanitizeIdentifier(operationId);
+  const [, ...rest] = parts;
+  return rest.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join("");
 }
 
 function sanitizeIdentifier(name: string): string {
@@ -397,14 +410,16 @@ function generateContextFile(
   }
 
   const seenNames = new Set<string>();
+  const methodEntries: string[] = [];
+
   for (const op of operations) {
-    let fnName = operationIdToFunctionName(op.operationId);
-    if (seenNames.has(fnName)) {
+    let methodName = operationIdToMethodName(op.operationId);
+    if (seenNames.has(methodName)) {
       let suffix = 1;
-      while (seenNames.has(`${fnName}${suffix}`)) suffix++;
-      fnName = `${fnName}${suffix}`;
+      while (seenNames.has(`${methodName}${suffix}`)) suffix++;
+      methodName = `${methodName}${suffix}`;
     }
-    seenNames.add(fnName);
+    seenNames.add(methodName);
 
     const pathParamsType =
       op.pathParams.length > 0
@@ -434,53 +449,57 @@ function generateContextFile(
       pathExpr = "`" + repl + "`";
     }
 
-    const returnType = `Promise<import("axios").AxiosResponse<${op.responseType}>>`;
-
-    lines.push(`export async function ${fnName}(${args}): ${returnType} {`);
+    const methodLines: string[] = [];
+    methodLines.push(`    async ${methodName}(${args}) {`);
 
     if (op.producesBlob) {
       if (op.method === "get" || op.method === "delete") {
         if (op.pathParams.length > 0 && op.queryParams.length > 0) {
-          lines.push(`  const { ${op.pathParams.join(", ")}, ...query } = params ?? {};`);
-          lines.push(`  const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params: query });`);
+          methodLines.push(`      const { ${op.pathParams.join(", ")}, ...query } = params ?? {};`);
+          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params: query });`);
         } else if (op.pathParams.length > 0) {
-          lines.push(`  const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
+          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
         } else if (op.queryParams.length > 0) {
-          lines.push(`  const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params });`);
+          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params });`);
         } else {
-          lines.push(`  const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
+          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`);
         }
       } else {
         if (op.pathParams.length > 0) {
-          lines.push(`  const res = await client.${op.method}<Blob>(${pathExpr}, data, { responseType: "blob" });`);
+          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, data, { responseType: "blob" });`);
         } else {
-          lines.push(`  const res = await client.${op.method}<Blob>(${pathExpr}, data, { responseType: "blob" });`);
+          methodLines.push(`      const res = await client.${op.method}<Blob>(${pathExpr}, data, { responseType: "blob" });`);
         }
       }
-      lines.push(`  if (options?.download) triggerBlobDownload(res.data, res.headers as BlobDownloadHeaders, options.filename);`);
-      lines.push(`  return res;`);
+      methodLines.push(`      if (options?.download) triggerBlobDownload(res.data, res.headers as BlobDownloadHeaders, options.filename);`);
+      methodLines.push(`      return res;`);
     } else if (op.method === "get" || op.method === "delete") {
       if (op.pathParams.length > 0 && op.queryParams.length > 0) {
-        lines.push(`  const { ${op.pathParams.join(", ")}, ...query } = params;`);
-        lines.push(`  return client.${op.method}<${op.responseType}>(${pathExpr}, { params: query });`);
+        methodLines.push(`      const { ${op.pathParams.join(", ")}, ...query } = params;`);
+        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr}, { params: query });`);
       } else if (op.pathParams.length > 0) {
-        lines.push(`  return client.${op.method}<${op.responseType}>(${pathExpr});`);
+        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr});`);
       } else if (op.queryParams.length > 0) {
-        lines.push(`  return client.${op.method}<${op.responseType}>(${pathExpr}, { params });`);
+        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr}, { params });`);
       } else {
-        lines.push(`  return client.${op.method}<${op.responseType}>(${pathExpr});`);
+        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr});`);
       }
     } else {
       if (op.pathParams.length > 0) {
-        lines.push(`  return client.${op.method}<${op.responseType}>(${pathExpr}, data);`);
+        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr}, data);`);
       } else {
-        lines.push(`  return client.${op.method}<${op.responseType}>(${pathExpr}, data);`);
+        methodLines.push(`      return client.${op.method}<${op.responseType}>(${pathExpr}, data);`);
       }
     }
 
-    lines.push("}");
-    lines.push("");
+    methodLines.push(`    }`);
+    methodEntries.push(methodLines.join("\n"));
   }
+
+  const exportName = contextToIdentifier(tag);
+  lines.push(`export const ${exportName} = {`);
+  lines.push(methodEntries.join(",\n"));
+  lines.push("};");
 
   return lines.join("\n");
 }
@@ -549,16 +568,36 @@ export function triggerBlobDownload(
 `;
 }
 
+function generateApiClient(contextTags: string[]): string {
+  const entries = contextTags.map((t) => ({
+    file: sanitizeContextName(t),
+    id: contextToIdentifier(t),
+  }));
+  const imports = entries.map((e) => `import { ${e.id} } from "./contexts/${e.file}.js";`).join("\n");
+  const props = entries.map((e) => `  ${e.id}`).join(",\n");
+  return `// Auto-generated nested API client
+${imports}
+
+export const apiClient = {
+${props},
+};
+`;
+}
+
 function generateIndex(contextTags: string[]): string {
   const exports: string[] = [
     'export { client, setAuthToken } from "./client.js";',
+    'export { apiClient } from "./apiClient.js";',
     'export * from "./types/index.js";',
     "",
   ];
 
+  const reserved = new Set(["client"]);
   for (const tag of contextTags) {
-    const ctxName = sanitizeContextName(tag);
-    exports.push(`export * from "./contexts/${ctxName}.js";`);
+    const ctxFile = sanitizeContextName(tag);
+    const ctxId = contextToIdentifier(tag);
+    const exportName = reserved.has(ctxId) ? `${ctxId}Context` : ctxId;
+    exports.push(`export { ${ctxId} as ${exportName} } from "./contexts/${ctxFile}.js";`);
   }
 
   return exports.join("\n");
@@ -598,11 +637,13 @@ async function main(): Promise<void> {
     writeFileSync(join(contextsDir, `${ctxName}.ts`), content);
   }
 
+  writeFileSync(join(outDir, "apiClient.ts"), generateApiClient(sortedTags));
   writeFileSync(join(outDir, "index.ts"), generateIndex(sortedTags));
 
   console.log(`Generated API client in ${outDir}`);
   console.log(`  - types/index.ts`);
   console.log(`  - client.ts`);
+  console.log(`  - apiClient.ts`);
   console.log(`  - contexts/*.ts (${sortedTags.length} files)`);
   console.log(`  - index.ts`);
 }
