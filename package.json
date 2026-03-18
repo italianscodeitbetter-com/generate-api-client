@@ -1,6 +1,6 @@
 {
   "name": "@icib.dev/api-client",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Generator for strictly-typed TypeScript API clients from OpenAPI specs",
   "type": "module",
   "bin": {
