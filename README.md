@@ -25,7 +25,7 @@ setAuthToken(process.env.API_TOKEN);
 const res = await apiClient.allegati.list({ page: 1, size: 10 });
 ```
 
-3. Add verify to your build (fails if docs changed or client was modified):
+3. Add verify to your build (ensures version alignment for production; fails if docs changed or client was modified):
 
 ```json
 {
@@ -90,7 +90,9 @@ api/
 
 ### Hash verification
 
-Add `api-client-verify` before your build to ensure the generated client matches the current OpenAPI docs. When you run your build, it:
+Add `api-client-verify` before your build to ensure the generated client matches the current OpenAPI docs. You can insert it in the build step of your utilization library (the app or library that consumes the API client) to verify version alignment before production builds—if the API docs changed or the client was modified, the build fails and you must regenerate.
+
+When you run your build, it:
 
 1. Reads the manifest (created by `generate`)
 2. Fetches the current docs and compares their hash

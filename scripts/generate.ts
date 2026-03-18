@@ -174,6 +174,28 @@ function getPaths(doc: ParsedSpec): Record<string, PathItem> {
   return doc.paths ?? {};
 }
 
+/** Extract response schema from OpenAPI 2.0 (schema) or OpenAPI 3.0 (content) */
+function getResponseSchema(response: unknown): SchemaObject | undefined {
+  if (!response || typeof response !== "object") return undefined;
+  const r = response as Record<string, unknown>;
+  // OpenAPI 2.0: schema directly on response
+  if (r.schema && typeof r.schema === "object") {
+    return r.schema as SchemaObject;
+  }
+  // OpenAPI 3.0: schema under content['application/json'] or content['*/*']
+  const content = r.content as
+    | Record<string, { schema?: SchemaObject }>
+    | undefined;
+  if (content) {
+    const jsonContent =
+      content["application/json"] ??
+      content["*/*"] ??
+      Object.values(content)[0];
+    return jsonContent?.schema;
+  }
+  return undefined;
+}
+
 function schemaToTsType(
   schema: SchemaObject | undefined,
   definitions: Record<string, SchemaObject>,
@@ -411,7 +433,7 @@ function extractOperations(
       }
 
       const successResponse = op.responses?.["200"] ?? op.responses?.["201"];
-      const respSchema = successResponse?.schema as SchemaObject | undefined;
+      const respSchema = getResponseSchema(successResponse);
       const respDesc =
         (successResponse as { description?: string })?.description ?? "";
       const xResponseType = (

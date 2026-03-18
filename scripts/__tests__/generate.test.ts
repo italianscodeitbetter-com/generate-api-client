@@ -20,6 +20,13 @@ const fixturePath = join(
   "fixtures",
   "minimal-openapi.json",
 );
+const openapi3ContentFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "openapi3-content-response.json",
+);
 
 describe("generate manifest", () => {
   let tempDir: string;
@@ -96,5 +103,21 @@ describe("generate manifest", () => {
     const fixtureSpec = JSON.parse(readFileSync(fixturePath, "utf-8"));
     const computedDocsHash = normalizedJsonHash(fixtureSpec);
     expect(manifest.docsHash).toBe(computedDocsHash);
+  });
+
+  it("extracts response schema from OpenAPI 3.0 content (application/json)", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi3ContentFixturePath}" --out api`,
+      { cwd: tempDir },
+    );
+
+    const authContext = readFileSync(
+      join(tempDir, "api", "contexts", "auth.ts"),
+      "utf-8",
+    );
+    expect(authContext).toContain("LoginResponse");
+    expect(authContext).toContain("client.post<LoginResponse>");
   });
 });
