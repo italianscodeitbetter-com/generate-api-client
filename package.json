@@ -1,7 +1,7 @@
 {
   "name": "@icib.dev/api-client",
-  "version": "1.0.0",
-  "description": "Strictly-typed TypeScript API client for ICIB/GSS API",
+  "version": "1.0.1",
+  "description": "Strictly-typed TypeScript API client for ICIB API",
   "type": "module",
   "main": "./dist/api/index.js",
   "types": "./dist/api/index.d.ts",

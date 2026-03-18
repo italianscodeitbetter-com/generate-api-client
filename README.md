@@ -1,6 +1,6 @@
 # @icib.dev/api-client
 
-Strictly-typed TypeScript API client for the ICIB/GSS API, built with Axios and organized by context (tags).
+Strictly-typed TypeScript API client for the ICIB API, built with Axios and organized by context (tags).
 
 ## Install
 
