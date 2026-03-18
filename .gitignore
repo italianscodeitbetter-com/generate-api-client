@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+api
+
+# Generated API client (uncomment to commit)
+# api/
