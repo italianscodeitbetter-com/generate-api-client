@@ -13,7 +13,7 @@ npm run generate
 With options:
 
 ```bash
-npm run generate -- --url https://api-gss.icib.dev/docs/?format=openapi --out api
+npm run generate -- --url https://api.icib.dev/docs/?format=openapi --out api
 ```
 
 ### Output
@@ -46,6 +46,7 @@ const detail = await apiClient.allegati.read({ id: res.data.results[0].id });
 ### JSDoc documentation
 
 The generated client includes JSDoc comments from the OpenAPI spec:
+
 - **Context/controller**: Description from tag or "API client for X endpoints"
 - **Methods**: Operation `summary` and `description`
 - **Params**: `@param` with descriptions for path params, query params, and body
@@ -69,56 +70,3 @@ await apiClient.QR_Code.generateCsv(
   { download: true, filename: "qrcodes.csv" },
 );
 ```
-
----
-
-# PostgreSQL Database Sync
-
-This script syncs a PostgreSQL database from a source to a target using `pg_dump` and `pg_restore`.
-
-## Usage
-
-### Using Docker
-
-Build the Docker image:
-
-```bash
-docker build -t postgres-sync .
-```
-
-Run the sync:
-
-```bash
-docker run --rm \
-  -e SOURCE_DB_URL="postgresql://user:password@host:port/database" \
-  -e TARGET_DB_URL="postgresql://user:password@host:port/database" \
-  postgres-sync
-```
-
-### Using the script directly
-
-Make the script executable:
-
-```bash
-chmod +x sync.sh
-```
-
-Run with environment variables:
-
-```bash
-SOURCE_DB_URL="postgresql://user:password@host:port/database" \
-TARGET_DB_URL="postgresql://user:password@host:port/database" \
-./sync.sh
-```
-
-## Environment Variables
-
-- `SOURCE_DB_URL`: The source database connection string
-- `TARGET_DB_URL`: The target database connection string where the dump will be restored
-
-## Notes
-
-- The script uses `pg_dump` with format `-Fc` (custom format) for efficient dumps
-- Only the `public` schema is synced (`-n public`)
-- The dump file (`db_dump.bak`) is automatically cleaned up after successful restore
-- The script will exit with an error code if any step fails

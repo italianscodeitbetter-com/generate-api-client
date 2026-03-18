@@ -12,4 +12,8 @@
     "resolveJsonModule": true
   },
   "include": ["scripts/**/*.ts"],
-  "exclude": ["node_modules", "api"]
+  "exclude": ["node_modules", "api"],
+  "paths": {
+    "@/*": ["./*"]
+  }
+}
