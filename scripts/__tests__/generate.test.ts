@@ -27,6 +27,13 @@ const openapi3ContentFixturePath = join(
   "fixtures",
   "openapi3-content-response.json",
 );
+const openapi2BodyFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "openapi2-body-response.json",
+);
 
 describe("generate manifest", () => {
   let tempDir: string;
@@ -119,5 +126,38 @@ describe("generate manifest", () => {
     );
     expect(authContext).toContain("LoginResponse");
     expect(authContext).toContain("client.post<LoginResponse>");
+  });
+
+  it("extracts request body schema from OpenAPI 3.0 requestBody", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi3ContentFixturePath}" --out api`,
+      { cwd: tempDir },
+    );
+
+    const itemContext = readFileSync(
+      join(tempDir, "api", "contexts", "item.ts"),
+      "utf-8",
+    );
+    expect(itemContext).toContain("UpdateItem");
+    expect(itemContext).toContain("data: UpdateItem");
+  });
+
+  it("extracts body and response from OpenAPI 2.0 (parameters in:body, responses.schema)", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi2BodyFixturePath}" --out api`,
+      { cwd: tempDir },
+    );
+
+    const itemContext = readFileSync(
+      join(tempDir, "api", "contexts", "item.ts"),
+      "utf-8",
+    );
+    expect(itemContext).toContain("UpdateItem");
+    expect(itemContext).toContain("data: UpdateItem");
+    expect(itemContext).toContain("client.put<Item>");
   });
 });

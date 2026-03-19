@@ -1,0 +1,41 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Test API", "version": "1.0.0" },
+  "host": "api.example.com",
+  "basePath": "/api",
+  "schemes": ["https"],
+  "paths": {
+    "/item/{id}": {
+      "put": {
+        "operationId": "ItemController_updateItem",
+        "summary": "Update item (OAS2)",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "type": "string" },
+          {
+            "name": "data",
+            "in": "body",
+            "required": true,
+            "schema": { "$ref": "#/definitions/UpdateItem" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "schema": { "$ref": "#/definitions/Item" }
+          }
+        },
+        "tags": ["item"]
+      }
+    }
+  },
+  "definitions": {
+    "Item": {
+      "type": "object",
+      "properties": { "id": { "type": "string" }, "name": { "type": "string" } }
+    },
+    "UpdateItem": {
+      "type": "object",
+      "properties": { "name": { "type": "string" } }
+    }
+  }
+}

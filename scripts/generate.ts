@@ -174,7 +174,11 @@ function getPaths(doc: ParsedSpec): Record<string, PathItem> {
   return doc.paths ?? {};
 }
 
-/** Extract response schema from OpenAPI 2.0 (schema) or OpenAPI 3.0 (content) */
+/**
+ * Extract response schema. Compatible with:
+ * - OpenAPI 2.0: response.schema
+ * - OpenAPI 3.0: response.content['application/json'].schema
+ */
 function getResponseSchema(response: unknown): SchemaObject | undefined {
   if (!response || typeof response !== "object") return undefined;
   const r = response as Record<string, unknown>;
@@ -184,6 +188,26 @@ function getResponseSchema(response: unknown): SchemaObject | undefined {
   }
   // OpenAPI 3.0: schema under content['application/json'] or content['*/*']
   const content = r.content as
+    | Record<string, { schema?: SchemaObject }>
+    | undefined;
+  if (content) {
+    const jsonContent =
+      content["application/json"] ??
+      content["*/*"] ??
+      Object.values(content)[0];
+    return jsonContent?.schema;
+  }
+  return undefined;
+}
+
+/**
+ * Extract request body schema from OpenAPI 3.0 requestBody.content.
+ * OpenAPI 2.0 uses parameters with in: "body" (handled separately in extractOperations).
+ */
+function getRequestBodySchema(requestBody: unknown): SchemaObject | undefined {
+  if (!requestBody || typeof requestBody !== "object") return undefined;
+  const rb = requestBody as Record<string, unknown>;
+  const content = rb.content as
     | Record<string, { schema?: SchemaObject }>
     | undefined;
   if (content) {
@@ -344,6 +368,7 @@ function extractOperations(
               description?: string;
               schema?: SchemaObject;
             }>;
+            requestBody?: unknown;
             responses?: Record<string, { schema?: SchemaObject }>;
             tags?: string[];
           }
@@ -423,6 +448,33 @@ function extractOperations(
           }
           bodyParam = {
             name: p.name,
+            schema: bodySchema,
+            propertyDescriptions:
+              Object.keys(propertyDescriptions).length > 0
+                ? propertyDescriptions
+                : undefined,
+          };
+        }
+      }
+
+      // OpenAPI 3.0: body in requestBody (OAS 2.0 uses parameters in: "body" above)
+      if (!bodyParam && op.requestBody) {
+        const bodySchema = getRequestBodySchema(op.requestBody);
+        if (bodySchema) {
+          const propertyDescriptions: Record<string, string> = {};
+          if (bodySchema.properties) {
+            for (const [propName, propSchema] of Object.entries(
+              bodySchema.properties,
+            )) {
+              const desc =
+                (propSchema as { description?: string; title?: string })
+                  .description ??
+                (propSchema as { description?: string; title?: string }).title;
+              if (desc) propertyDescriptions[propName] = desc;
+            }
+          }
+          bodyParam = {
+            name: "data",
             schema: bodySchema,
             propertyDescriptions:
               Object.keys(propertyDescriptions).length > 0
