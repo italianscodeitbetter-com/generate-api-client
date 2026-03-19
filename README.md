@@ -61,9 +61,13 @@ BASE_PATH=/v2 npx api-client-generate
 # Custom client base URL (default: from spec URL, BASE_URL, or spec host)
 npx api-client-generate --base-url https://api.mycompany.com
 BASE_URL=https://api.mycompany.com npx api-client-generate
+
+# Override client.ts (by default, existing client is preserved if you customized it)
+npx api-client-generate --override-client   # prompts for confirmation
+npx api-client-generate --override-client --yes   # skip confirmation (e.g. CI)
 ```
 
-The client is generated in your project directory (e.g. `./api/`).
+The client is generated in your project directory (e.g. `./api/`). If `client.ts` already exists, it is **not** overwritten unless you pass `--override-client` (which prompts for confirmation; use `--yes` to skip the prompt).
 
 ### From the library repo (maintainers)
 

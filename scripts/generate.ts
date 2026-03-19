@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-import { readFileSync, mkdirSync, writeFileSync } from "fs";
+import { readFileSync, mkdirSync, writeFileSync, existsSync } from "fs";
+import { createInterface } from "readline";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import SwaggerParser from "@apidevtools/swagger-parser";
@@ -67,6 +68,8 @@ interface CliArgs {
   out: string;
   basePath?: string;
   baseUrl?: string;
+  overrideClient: boolean;
+  yes: boolean;
 }
 
 function parseArgs(): CliArgs {
@@ -75,6 +78,8 @@ function parseArgs(): CliArgs {
   let out = DEFAULT_OUT;
   let basePath: string | undefined = process.env.BASE_PATH;
   let baseUrl: string | undefined = process.env.BASE_URL;
+  let overrideClient = false;
+  let yes = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--url" && args[i + 1]) {
@@ -91,10 +96,25 @@ function parseArgs(): CliArgs {
       args[i + 1]
     ) {
       baseUrl = args[++i];
+    } else if (args[i] === "--override-client" || args[i] === "--overwrite-client") {
+      overrideClient = true;
+    } else if (args[i] === "--yes" || args[i] === "-y") {
+      yes = true;
     }
   }
 
-  return { url, out, basePath, baseUrl };
+  return { url, out, basePath, baseUrl, overrideClient, yes };
+}
+
+function askConfirmation(question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      const normalized = answer.trim().toLowerCase();
+      resolve(normalized === "y" || normalized === "yes");
+    });
+  });
 }
 
 async function fetchSpec(url: string): Promise<unknown> {
@@ -985,6 +1005,8 @@ async function main(): Promise<void> {
     out,
     basePath: basePathOverride,
     baseUrl: baseUrlOverride,
+    overrideClient,
+    yes,
   } = parseArgs();
   console.log(`Fetching spec from ${url}...`);
 
@@ -1028,7 +1050,25 @@ async function main(): Promise<void> {
     : baseUrl;
 
   writeFileSync(join(typesDir, "index.ts"), generateTypes(definitions));
-  writeFileSync(join(outDir, "client.ts"), generateClient(clientBaseUrl));
+
+  const clientPath = join(outDir, "client.ts");
+  const clientExists = existsSync(clientPath);
+  let writeClient = !clientExists;
+  if (clientExists) {
+    if (overrideClient) {
+      if (yes) {
+        writeClient = true;
+      } else {
+        const confirmed = await askConfirmation(
+          "This will overwrite your client.ts. Are you sure? (y/N) ",
+        );
+        writeClient = confirmed;
+      }
+    }
+  }
+  if (writeClient) {
+    writeFileSync(clientPath, generateClient(clientBaseUrl));
+  }
 
   const sortedTags = [...byTag.keys()].sort();
   for (const tag of sortedTags) {
@@ -1062,7 +1102,7 @@ async function main(): Promise<void> {
 
   console.log(`Generated API client in ${outDir}`);
   console.log(`  - types/index.ts`);
-  console.log(`  - client.ts`);
+  console.log(`  - client.ts${writeClient ? "" : " (skipped, use --override-client to overwrite)"}`);
   console.log(`  - apiClient.ts`);
   console.log(`  - contexts/*.ts (${sortedTags.length} files)`);
   console.log(`  - index.ts`);
