@@ -21,6 +21,10 @@ interface SchemaObject {
   required?: string[];
   format?: string;
   "x-nullable"?: boolean;
+  /** OpenAPI 3.0 */
+  nullable?: boolean;
+  enum?: unknown[];
+  allOf?: SchemaObject[];
   description?: string;
   title?: string;
 }
@@ -240,6 +244,25 @@ function getRequestBodySchema(requestBody: unknown): SchemaObject | undefined {
   return undefined;
 }
 
+function isNullableSchema(schema: SchemaObject): boolean {
+  return (
+    schema["x-nullable"] === true ||
+    schema.nullable === true
+  );
+}
+
+/** JSON Schema / OpenAPI `enum` → TypeScript union of literals */
+function enumToLiteralUnion(values: unknown[]): string {
+  return values
+    .map((v) => {
+      if (v === null) return "null";
+      if (typeof v === "string") return JSON.stringify(v);
+      if (typeof v === "number" || typeof v === "boolean") return String(v);
+      return "unknown";
+    })
+    .join(" | ");
+}
+
 function schemaToTsType(
   schema: SchemaObject | undefined,
   definitions: Record<string, SchemaObject>,
@@ -255,12 +278,30 @@ function schemaToTsType(
     const name = match?.[1];
     if (name && !refsSeen.has(name)) {
       refsSeen.add(name);
-      return name;
+      const inner = name;
+      return isNullableSchema(schema) ? `${inner} | null` : inner;
     }
-    return name ?? "unknown";
+    const inner = name ?? "unknown";
+    return isNullableSchema(schema) ? `${inner} | null` : inner;
   }
 
-  const nullable = schema["x-nullable"] === true;
+  const nullable = isNullableSchema(schema);
+
+  const allOf = schema.allOf;
+  if (Array.isArray(allOf) && allOf.length > 0) {
+    const types = allOf.map((sub) =>
+      schemaToTsType(sub, definitions, refsSeen),
+    );
+    const inner =
+      types.length === 1 ? types[0]! : types.map((t) => `(${t})`).join(" & ");
+    return nullable ? `${inner} | null` : inner;
+  }
+
+  const enumVals = schema.enum;
+  if (Array.isArray(enumVals) && enumVals.length > 0) {
+    const inner = enumToLiteralUnion(enumVals);
+    return nullable ? `${inner} | null` : inner;
+  }
 
   if (schema.type === "array") {
     const items = schema.items;
@@ -277,9 +318,11 @@ function schemaToTsType(
         const t = schemaToTsType(propSchema, definitions, refsSeen);
         return `  ${k}${optional ? "?" : ""}: ${t};`;
       });
-      return `{\n${props.join("\n")}\n}`;
+      const obj = `{\n${props.join("\n")}\n}`;
+      return nullable ? `${obj} | null` : obj;
     }
-    return "Record<string, unknown>";
+    const rec = "Record<string, unknown>";
+    return nullable ? `${rec} | null` : rec;
   }
 
   const prim: Record<string, string> = {
@@ -303,6 +346,23 @@ function generateTypes(definitions: Record<string, SchemaObject>): string {
   for (const [name, schema] of Object.entries(definitions)) {
     const s = schema as SchemaObject;
     if (s.$ref) continue;
+
+    const enumVals = s.enum;
+    if (
+      Array.isArray(enumVals) &&
+      enumVals.length > 0 &&
+      !s.properties &&
+      s.type !== "object"
+    ) {
+      const ifaceDesc = s.description;
+      if (ifaceDesc) lines.push(`/** ${jsdocEscape(ifaceDesc)} */`);
+      const union = enumToLiteralUnion(enumVals);
+      const nullable = isNullableSchema(s);
+      lines.push(
+        `export type ${name} = ${nullable ? `${union} | null` : union};\n`,
+      );
+      continue;
+    }
 
     const props: string[] = [];
     if (s.properties) {

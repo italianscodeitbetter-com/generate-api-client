@@ -9,4 +9,5 @@ api-client.manifest.json
 # Generated API client (uncomment to commit)
 # api/
 
+tmp
 *.schema.json
