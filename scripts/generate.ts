@@ -263,10 +263,87 @@ function enumToLiteralUnion(values: unknown[]): string {
     .join(" | ");
 }
 
+/** e.g. `theme` → Theme, `foo_bar` → FooBar */
+function propertyNameToPascalCase(prop: string): string {
+  return prop
+    .split(/[^a-zA-Z0-9]+/g)
+    .filter(Boolean)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join("");
+}
+
+function canEmitNamedEnum(values: unknown[]): boolean {
+  return values.every(
+    (v) => typeof v === "string" || typeof v === "number",
+  );
+}
+
+/** Unique TS identifier for an enum member; mutates `used`. */
+function enumMemberKeyForValue(
+  value: string | number,
+  used: Set<string>,
+): string {
+  if (typeof value === "number") {
+    const base = `N${String(value).replace(/[^0-9A-Za-z]/g, "_")}`;
+    let key = /^[0-9]/.test(base) ? `_${base}` : base;
+    let n = 0;
+    while (used.has(key)) key = `${base}_${++n}`;
+    used.add(key);
+    return key;
+  }
+  let base = value.replace(/[^a-zA-Z0-9_]/g, "_");
+  if (!/^[A-Za-z_]/.test(base)) base = `_${base}`;
+  if (!base.replace(/_/g, "")) base = "VALUE";
+  let key = base;
+  let n = 0;
+  while (used.has(key)) key = `${base}_${++n}`;
+  used.add(key);
+  return key;
+}
+
+function formatTsEnumBlock(
+  enumName: string,
+  values: unknown[],
+  description?: string,
+): string {
+  const usedMembers = new Set<string>();
+  const lines: string[] = [];
+  if (description) lines.push(`/** ${jsdocEscape(description)} */`);
+  lines.push(`export enum ${enumName} {`);
+  for (const v of values) {
+    if (typeof v === "string") {
+      const mem = enumMemberKeyForValue(v, usedMembers);
+      lines.push(`  ${mem} = ${JSON.stringify(v)},`);
+    } else if (typeof v === "number") {
+      const mem = enumMemberKeyForValue(v, usedMembers);
+      lines.push(`  ${mem} = ${v},`);
+    }
+  }
+  lines.push("}\n");
+  return lines.join("\n");
+}
+
+/** Collects `export enum` blocks for inline property enums: `{Root}{Path}Enum`. */
+interface InlineEnumEmitContext {
+  rootSchemaName: string;
+  propertyPath: string[];
+  preamble: string[];
+  emittedEnumNames: Set<string>;
+}
+
+function buildInlineEnumName(ctx: InlineEnumEmitContext): string {
+  const root = sanitizeIdentifier(ctx.rootSchemaName);
+  const pathPart = ctx.propertyPath
+    .map((seg) => propertyNameToPascalCase(seg))
+    .join("");
+  return `${root}${pathPart}Enum`;
+}
+
 function schemaToTsType(
   schema: SchemaObject | undefined,
   definitions: Record<string, SchemaObject>,
   refsSeen: Set<string> = new Set(),
+  inlineEnumCtx?: InlineEnumEmitContext,
 ): string {
   if (!schema) return "unknown";
 
@@ -290,7 +367,7 @@ function schemaToTsType(
   const allOf = schema.allOf;
   if (Array.isArray(allOf) && allOf.length > 0) {
     const types = allOf.map((sub) =>
-      schemaToTsType(sub, definitions, refsSeen),
+      schemaToTsType(sub, definitions, refsSeen, inlineEnumCtx),
     );
     const inner =
       types.length === 1 ? types[0]! : types.map((t) => `(${t})`).join(" & ");
@@ -299,13 +376,34 @@ function schemaToTsType(
 
   const enumVals = schema.enum;
   if (Array.isArray(enumVals) && enumVals.length > 0) {
+    if (inlineEnumCtx && canEmitNamedEnum(enumVals)) {
+      const enumName = buildInlineEnumName(inlineEnumCtx);
+      if (!inlineEnumCtx.emittedEnumNames.has(enumName)) {
+        inlineEnumCtx.emittedEnumNames.add(enumName);
+        inlineEnumCtx.preamble.push(
+          formatTsEnumBlock(
+            enumName,
+            enumVals,
+            schema.description ?? schema.title,
+          ),
+        );
+      }
+      const inner = enumName;
+      return nullable ? `${inner} | null` : inner;
+    }
     const inner = enumToLiteralUnion(enumVals);
     return nullable ? `${inner} | null` : inner;
   }
 
   if (schema.type === "array") {
     const items = schema.items;
-    const itemType = schemaToTsType(items, definitions, refsSeen);
+    const itemCtx = inlineEnumCtx
+      ? {
+          ...inlineEnumCtx,
+          propertyPath: [...inlineEnumCtx.propertyPath, "item"],
+        }
+      : undefined;
+    const itemType = schemaToTsType(items, definitions, refsSeen, itemCtx);
     const arr = `Array<${itemType}>`;
     return nullable ? `${arr} | null` : arr;
   }
@@ -315,7 +413,13 @@ function schemaToTsType(
       const props = Object.entries(schema.properties).map(([k, v]) => {
         const propSchema = v as SchemaObject;
         const optional = !(schema.required ?? []).includes(k);
-        const t = schemaToTsType(propSchema, definitions, refsSeen);
+        const childCtx = inlineEnumCtx
+          ? {
+              ...inlineEnumCtx,
+              propertyPath: [...inlineEnumCtx.propertyPath, k],
+            }
+          : undefined;
+        const t = schemaToTsType(propSchema, definitions, refsSeen, childCtx);
         return `  ${k}${optional ? "?" : ""}: ${t};`;
       });
       const obj = `{\n${props.join("\n")}\n}`;
@@ -354,22 +458,42 @@ function generateTypes(definitions: Record<string, SchemaObject>): string {
       !s.properties &&
       s.type !== "object"
     ) {
-      const ifaceDesc = s.description;
-      if (ifaceDesc) lines.push(`/** ${jsdocEscape(ifaceDesc)} */`);
-      const union = enumToLiteralUnion(enumVals);
-      const nullable = isNullableSchema(s);
-      lines.push(
-        `export type ${name} = ${nullable ? `${union} | null` : union};\n`,
-      );
+      const ifaceDesc = s.description ?? s.title;
+      if (canEmitNamedEnum(enumVals)) {
+        const enumName = sanitizeIdentifier(name);
+        lines.push(formatTsEnumBlock(enumName, enumVals, ifaceDesc));
+      } else {
+        if (ifaceDesc) lines.push(`/** ${jsdocEscape(ifaceDesc)} */`);
+        const union = enumToLiteralUnion(enumVals);
+        const nullable = isNullableSchema(s);
+        lines.push(
+          `export type ${sanitizeIdentifier(name)} = ${nullable ? `${union} | null` : union};\n`,
+        );
+      }
       continue;
     }
 
     const props: string[] = [];
+    const sharedRefsSeen = new Set<string>();
+    const inlineEnumEmitter: InlineEnumEmitContext = {
+      rootSchemaName: name,
+      propertyPath: [],
+      preamble: [],
+      emittedEnumNames: new Set(),
+    };
     if (s.properties) {
       const required = new Set(s.required ?? []);
       for (const [propName, propSchema] of Object.entries(s.properties)) {
         const optional = !required.has(propName);
-        const t = schemaToTsType(propSchema as SchemaObject, definitions);
+        const t = schemaToTsType(
+          propSchema as SchemaObject,
+          definitions,
+          sharedRefsSeen,
+          {
+            ...inlineEnumEmitter,
+            propertyPath: [propName],
+          },
+        );
         const desc =
           (propSchema as { description?: string; title?: string })
             .description ??
@@ -386,6 +510,9 @@ function generateTypes(definitions: Record<string, SchemaObject>): string {
       if (ifaceDesc) lines.push(`/** ${jsdocEscape(ifaceDesc)} */`);
       lines.push(`export interface ${name} {\n  [key: string]: unknown;\n}\n`);
     } else {
+      if (inlineEnumEmitter.preamble.length > 0) {
+        lines.push(inlineEnumEmitter.preamble.join(""));
+      }
       if (ifaceDesc) lines.push(`/** ${jsdocEscape(ifaceDesc)} */`);
       lines.push(`export interface ${name} {`);
       lines.push(...props);
