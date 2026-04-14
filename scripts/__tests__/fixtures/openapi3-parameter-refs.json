@@ -1,0 +1,33 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Ref params", "version": "1.0.0" },
+  "paths": {
+    "/things": {
+      "get": {
+        "operationId": "things_list",
+        "tags": ["things"],
+        "parameters": [{ "$ref": "#/components/parameters/PageParam" }],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": true }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "PageParam": {
+        "name": "page",
+        "in": "query",
+        "required": true,
+        "schema": { "type": "integer" }
+      }
+    }
+  }
+}

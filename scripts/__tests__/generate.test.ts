@@ -38,6 +38,13 @@ const blobExportFixturePath = join(
   "fixtures",
   "blob-export-openapi.json",
 );
+const openapi3ParameterRefsFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "openapi3-parameter-refs.json",
+);
 
 describe("generate manifest", () => {
   let tempDir: string;
@@ -159,6 +166,22 @@ describe("generate manifest", () => {
     expect(itemContext).toContain("UpdateItem");
     expect(itemContext).toContain("data: UpdateItem");
     expect(itemContext).toContain("client.put<Item>");
+  });
+
+  it("resolves parameter $ref so query/path args are emitted", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi3ParameterRefsFixturePath}" --out api-refs`,
+      { cwd: tempDir },
+    );
+
+    const thingsContext = readFileSync(
+      join(tempDir, "api-refs", "contexts", "things.ts"),
+      "utf-8",
+    );
+    expect(thingsContext).toContain("page:");
+    expect(thingsContext).toMatch(/params[^)]*page/);
   });
 
   it("leaves full Axios response for blob endpoints so res.data and headers work", async () => {

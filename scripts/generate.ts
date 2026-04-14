@@ -142,6 +142,71 @@ async function parseSpec(spec: unknown): Promise<ParsedSpec> {
   )) as ParsedSpec;
 }
 
+/** Resolve internal JSON pointers (`#/components/...`, `#/parameters/...`). */
+function resolveDocPointer(doc: ParsedSpec, ref: string): unknown {
+  if (!ref.startsWith("#/")) return undefined;
+  const parts = ref
+    .slice(2)
+    .split("/")
+    .map((p) => p.replace(/~1/g, "/").replace(/~0/g, "~"));
+  let cur: unknown = doc as unknown;
+  for (const part of parts) {
+    if (cur === undefined || cur === null || typeof cur !== "object") {
+      return undefined;
+    }
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+/**
+ * `SwaggerParser.parse` does not resolve `$ref`; OpenAPI often uses
+ * `{ "$ref": "#/components/parameters/..." }` in `parameters` arrays. Without
+ * resolving those, `in` / `name` are missing and query/path args are dropped.
+ */
+function dereferenceParameterObject(
+  doc: ParsedSpec,
+  param: unknown,
+  depth = 0,
+): ParameterObject | null {
+  if (depth > 24 || !param || typeof param !== "object") return null;
+  const ref = (param as { $ref?: string }).$ref;
+  if (typeof ref === "string") {
+    const resolved = resolveDocPointer(doc, ref);
+    return dereferenceParameterObject(doc, resolved, depth + 1);
+  }
+  const p = param as ParameterObject;
+  if (typeof p.name === "string" && typeof p.in === "string") return p;
+  return null;
+}
+
+function expandParameters(
+  doc: ParsedSpec,
+  list: unknown[] | undefined,
+): ParameterObject[] {
+  if (!list?.length) return [];
+  const out: ParameterObject[] = [];
+  for (const item of list) {
+    const p = dereferenceParameterObject(doc, item);
+    if (p) out.push(p);
+  }
+  return out;
+}
+
+function derefOpenApiFragment(
+  doc: ParsedSpec,
+  value: unknown,
+  depth = 0,
+): unknown {
+  if (depth > 24 || !value || typeof value !== "object") return value;
+  const ref = (value as { $ref?: string }).$ref;
+  if (typeof ref === "string") {
+    const resolved = resolveDocPointer(doc, ref);
+    return derefOpenApiFragment(doc, resolved, depth + 1);
+  }
+  return value;
+}
+
 interface ParsedSpec {
   host?: string;
   schemes?: string[];
@@ -555,6 +620,7 @@ interface Operation {
 function extractOperations(
   paths: Record<string, PathItem>,
   definitions: Record<string, SchemaObject>,
+  doc: ParsedSpec,
 ): Operation[] {
   const ops: Operation[] = [];
   const methods = ["get", "post", "put", "patch", "delete"] as const;
@@ -599,17 +665,12 @@ function extractOperations(
       const pathParamNames = [...(path.match(/\{([^}]+)\}/g) ?? [])].map((m) =>
         m.slice(1, -1),
       );
+      const pathItemParams = (pathItem as { parameters?: unknown[] })
+        .parameters;
       const allParams = [
-        ...(pathItem.parameters ?? []),
-        ...(op.parameters ?? []),
-      ] as Array<{
-        name: string;
-        in: string;
-        required?: boolean;
-        description?: string;
-        schema?: SchemaObject;
-        type?: string;
-      }>;
+        ...expandParameters(doc, pathItemParams),
+        ...expandParameters(doc, op.parameters as unknown[] | undefined),
+      ];
 
       for (const p of allParams) {
         if (p.in === "path") {
@@ -666,7 +727,8 @@ function extractOperations(
 
       // OpenAPI 3.0: body in requestBody (OAS 2.0 uses parameters in: "body" above)
       if (!bodyParam && op.requestBody) {
-        const bodySchema = getRequestBodySchema(op.requestBody);
+        const resolvedBody = derefOpenApiFragment(doc, op.requestBody);
+        const bodySchema = getRequestBodySchema(resolvedBody);
         if (bodySchema) {
           const propertyDescriptions: Record<string, string> = {};
           if (bodySchema.properties) {
@@ -1348,7 +1410,7 @@ async function main(): Promise<void> {
   console.log(`Paths: ${Object.keys(paths).length}`);
   console.log(`Definitions: ${Object.keys(definitions).length}`);
 
-  const ops = extractOperations(paths, definitions);
+  const ops = extractOperations(paths, definitions, doc);
   const byTag = groupByTag(ops, paths);
 
   const cwd = process.cwd();
