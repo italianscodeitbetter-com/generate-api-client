@@ -821,10 +821,10 @@ function generateContextFile(
   const clientImport =
     exportName === "client"
       ? hasBlobOps
-        ? `import { client as httpClient, triggerBlobDownload, type BlobDownloadOptions, type BlobDownloadHeaders } from "../client.js";`
+        ? `import { client as httpClient, triggerBlobDownload, ensureBlobAxiosResponse, type BlobDownloadOptions, type BlobDownloadHeaders } from "../client.js";`
         : `import { client as httpClient } from "../client.js";`
       : hasBlobOps
-        ? `import { client, triggerBlobDownload, type BlobDownloadOptions, type BlobDownloadHeaders } from "../client.js";`
+        ? `import { client, triggerBlobDownload, ensureBlobAxiosResponse, type BlobDownloadOptions, type BlobDownloadHeaders } from "../client.js";`
         : `import { client } from "../client.js";`;
   const lines: string[] = [
     `// Auto-generated API client for context: ${tag}`,
@@ -971,19 +971,19 @@ function generateContextFile(
             `      const { ${pathParamNames.join(", ")}, ...query } = params ?? {};`,
           );
           methodLines.push(
-            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params: query });`,
+            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params: query });`,
           );
         } else if (op.pathParams.length > 0) {
           methodLines.push(
-            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`,
+            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`,
           );
         } else if (op.queryParams.length > 0) {
           methodLines.push(
-            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params });`,
+            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params });`,
           );
         } else {
           methodLines.push(
-            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`,
+            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`,
           );
         }
       } else {
@@ -993,22 +993,23 @@ function generateContextFile(
             `      const { ${pathParamNames.join(", ")}, ...query } = params ?? {};`,
           );
           methodLines.push(
-            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob", params: query });`,
+            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob", params: query });`,
           );
         } else if (op.pathParams.length > 0) {
           methodLines.push(
-            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`,
+            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`,
           );
         } else if (op.queryParams.length > 0) {
           methodLines.push(
-            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob", params });`,
+            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob", params });`,
           );
         } else {
           methodLines.push(
-            `      const res = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`,
+            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`,
           );
         }
       }
+      methodLines.push(`      const res = ensureBlobAxiosResponse(_raw);`);
       methodLines.push(
         `      if (options?.download) triggerBlobDownload(res.data, res.headers as BlobDownloadHeaders, options.filename);`,
       );
@@ -1075,7 +1076,12 @@ function generateContextFile(
 
 function generateClient(baseUrl: string): string {
   return `// Auto-generated Axios client
-import axios, { type AxiosInstance, AxiosError } from "axios";
+import axios, {
+  type AxiosInstance,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+  AxiosError,
+} from "axios";
 
 let _token: string | null = null;
 
@@ -1113,15 +1119,45 @@ client.interceptors.response.use(
     if (response.status === 401) {
       clearAuthToken();
     }
+    const responseType = response.config.responseType;
+    if (responseType === "blob" || responseType === "arraybuffer") {
+      return response;
+    }
     return response.data;
   },
   (error) => {
-    if (error.response.status === 401) {
+    if (error.response?.status === 401) {
       clearAuthToken();
     }
     return AxiosError.from(error);
   },
 );
+
+/**
+ * Normalizes blob requests when an older client interceptor still returns only
+ * \`response.data\` (Blob). Current template returns the full AxiosResponse for
+ * blob/arraybuffer so headers stay available.
+ */
+export function ensureBlobAxiosResponse(
+  value: Blob | AxiosResponse<Blob>,
+): AxiosResponse<Blob> {
+  if (
+    value &&
+    typeof value === "object" &&
+    "headers" in value &&
+    "config" in value &&
+    "status" in value
+  ) {
+    return value as AxiosResponse<Blob>;
+  }
+  return {
+    data: value as Blob,
+    status: 200,
+    statusText: "OK",
+    headers: {},
+    config: {} as InternalAxiosRequestConfig,
+  };
+}
 
 /** Options for blob/download endpoints */
 export interface BlobDownloadOptions {
@@ -1183,7 +1219,7 @@ ${props},
 
 function generateIndex(contextTags: string[]): string {
   const exports: string[] = [
-    'export { client, setAuthToken } from "./client.js";',
+    'export { client, setAuthToken, ensureBlobAxiosResponse } from "./client.js";',
     'export { apiClient } from "./apiClient.js";',
     'export * from "./types/index.js";',
     "",

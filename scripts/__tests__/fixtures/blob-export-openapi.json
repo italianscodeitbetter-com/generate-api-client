@@ -1,0 +1,17 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Blob API", "version": "1.0.0" },
+  "host": "api.example.com",
+  "basePath": "/api",
+  "schemes": ["https"],
+  "paths": {
+    "/export/items": {
+      "get": {
+        "operationId": "export_items",
+        "tags": ["export"],
+        "responses": { "200": { "description": "CSV file" } }
+      }
+    }
+  },
+  "definitions": {}
+}

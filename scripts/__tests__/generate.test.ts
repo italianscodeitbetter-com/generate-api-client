@@ -5,10 +5,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
-import {
-  normalizedJsonHash,
-  computeClientHash,
-} from "../hash.js";
+import { normalizedJsonHash, computeClientHash } from "../hash.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,6 +31,13 @@ const openapi2BodyFixturePath = join(
   "fixtures",
   "openapi2-body-response.json",
 );
+const blobExportFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "blob-export-openapi.json",
+);
 
 describe("generate manifest", () => {
   let tempDir: string;
@@ -49,10 +53,9 @@ describe("generate manifest", () => {
   it("creates manifest with docsHash, clientHash, docsSource", async () => {
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
-    execSync(
-      `"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`,
-      { cwd: tempDir },
-    );
+    execSync(`"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`, {
+      cwd: tempDir,
+    });
 
     const manifestPath = join(tempDir, "api-client.manifest.json");
     expect(existsSync(manifestPath)).toBe(true);
@@ -70,10 +73,9 @@ describe("generate manifest", () => {
   it("manifest docsSource matches --url argument", async () => {
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
-    execSync(
-      `"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`,
-      { cwd: tempDir },
-    );
+    execSync(`"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`, {
+      cwd: tempDir,
+    });
 
     const manifest = JSON.parse(
       readFileSync(join(tempDir, "api-client.manifest.json"), "utf-8"),
@@ -84,10 +86,9 @@ describe("generate manifest", () => {
   it("manifest clientHash matches actual generated files", async () => {
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
-    execSync(
-      `"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`,
-      { cwd: tempDir },
-    );
+    execSync(`"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`, {
+      cwd: tempDir,
+    });
 
     const manifest = JSON.parse(
       readFileSync(join(tempDir, "api-client.manifest.json"), "utf-8"),
@@ -99,10 +100,9 @@ describe("generate manifest", () => {
   it("manifest docsHash matches fixture spec", async () => {
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
-    execSync(
-      `"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`,
-      { cwd: tempDir },
-    );
+    execSync(`"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`, {
+      cwd: tempDir,
+    });
 
     const manifest = JSON.parse(
       readFileSync(join(tempDir, "api-client.manifest.json"), "utf-8"),
@@ -159,5 +159,29 @@ describe("generate manifest", () => {
     expect(itemContext).toContain("UpdateItem");
     expect(itemContext).toContain("data: UpdateItem");
     expect(itemContext).toContain("client.put<Item>");
+  });
+
+  it("leaves full Axios response for blob endpoints so res.data and headers work", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${blobExportFixturePath}" --out api-blob`,
+      { cwd: tempDir },
+    );
+
+    const clientSource = readFileSync(
+      join(tempDir, "api-blob", "client.ts"),
+      "utf-8",
+    );
+    expect(clientSource).toContain('responseType === "blob"');
+    expect(clientSource).toContain('responseType === "arraybuffer"');
+
+    const exportContext = readFileSync(
+      join(tempDir, "api-blob", "contexts", "export.ts"),
+      "utf-8",
+    );
+    expect(exportContext).toContain('responseType: "blob"');
+    expect(exportContext).toContain("ensureBlobAxiosResponse(_raw)");
+    expect(exportContext).toContain("triggerBlobDownload(res.data");
   });
 });
