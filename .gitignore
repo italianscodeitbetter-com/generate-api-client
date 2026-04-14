@@ -11,3 +11,4 @@ api-client.manifest.json
 
 tmp
 *.schema.json
+scripts/__tests__/.runtime-gen/

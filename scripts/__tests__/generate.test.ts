@@ -175,6 +175,8 @@ describe("generate manifest", () => {
     );
     expect(clientSource).toContain('responseType === "blob"');
     expect(clientSource).toContain('responseType === "arraybuffer"');
+    expect(clientSource).toContain("setAuthRefreshHandler");
+    expect(clientSource).toContain("AUTH_RETRY_MAX");
 
     const exportContext = readFileSync(
       join(tempDir, "api-blob", "contexts", "export.ts"),

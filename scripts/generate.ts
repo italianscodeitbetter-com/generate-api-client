@@ -2,7 +2,7 @@
 
 import { readFileSync, mkdirSync, writeFileSync, existsSync } from "fs";
 import { createInterface } from "readline";
-import { dirname, join } from "path";
+import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import SwaggerParser from "@apidevtools/swagger-parser";
 import { normalizedJsonHash, computeClientHash } from "./hash.js";
@@ -1074,14 +1074,25 @@ function generateContextFile(
   return lines.join("\n");
 }
 
-function generateClient(baseUrl: string): string {
+export function generateClient(baseUrl: string): string {
   return `// Auto-generated Axios client
 import axios, {
   type AxiosInstance,
   type AxiosResponse,
   type InternalAxiosRequestConfig,
-  AxiosError,
 } from "axios";
+
+declare module "axios" {
+  interface InternalAxiosRequestConfig {
+    /**
+     * When true, 401/403 on this request will not run the auth refresh handler.
+     * Set on refresh-token calls that use the same \`client\` to avoid retry loops.
+     */
+    skipAuthRefresh?: boolean;
+  }
+}
+
+const AUTH_RETRY_MAX = 3;
 
 let _token: string | null = null;
 
@@ -1100,6 +1111,21 @@ export function clearAuthToken(): void {
   // insert your own logic here
 }
 
+/**
+ * The \`saveToken\` argument passed to your refresh handler is \`setAuthToken\`
+ * (memory + optional per-call persistence callback).
+ */
+export type AuthRefreshHandler = (
+  saveToken: typeof setAuthToken,
+) => Promise<void>;
+
+let _refreshHandler: AuthRefreshHandler | null = null;
+let _refreshInFlight: Promise<void> | null = null;
+
+export function setAuthRefreshHandler(handler: AuthRefreshHandler | null): void {
+  _refreshHandler = handler;
+}
+
 export const client: AxiosInstance = axios.create({
   baseURL: "${baseUrl}",
   headers: {
@@ -1116,20 +1142,60 @@ client.interceptors.request.use((config) => {
 
 client.interceptors.response.use(
   (response) => {
-    if (response.status === 401) {
-      clearAuthToken();
-    }
     const responseType = response.config.responseType;
     if (responseType === "blob" || responseType === "arraybuffer") {
       return response;
     }
     return response.data;
   },
-  (error) => {
-    if (error.response?.status === 401) {
-      clearAuthToken();
+  async (error: unknown) => {
+    if (!axios.isAxiosError(error) || !error.config) {
+      return Promise.reject(error);
     }
-    return AxiosError.from(error);
+    const originalConfig = error.config as InternalAxiosRequestConfig & {
+      __authRetryCount?: number;
+    };
+    const status = error.response?.status;
+
+    if (originalConfig.skipAuthRefresh) {
+      if (status === 401) {
+        clearAuthToken();
+      }
+      return Promise.reject(error);
+    }
+
+    if ((status !== 401 && status !== 403) || !_refreshHandler) {
+      if (status === 401) {
+        clearAuthToken();
+      }
+      return Promise.reject(error);
+    }
+
+    const retries = originalConfig.__authRetryCount ?? 0;
+    if (retries >= AUTH_RETRY_MAX) {
+      if (status === 401) {
+        clearAuthToken();
+      }
+      return Promise.reject(error);
+    }
+
+    originalConfig.__authRetryCount = retries + 1;
+
+    try {
+      if (!_refreshInFlight) {
+        _refreshInFlight = _refreshHandler(setAuthToken).finally(() => {
+          _refreshInFlight = null;
+        });
+      }
+      await _refreshInFlight;
+    } catch {
+      if (status === 401) {
+        clearAuthToken();
+      }
+      return Promise.reject(error);
+    }
+
+    return client.request(originalConfig);
   },
 );
 
@@ -1219,7 +1285,8 @@ ${props},
 
 function generateIndex(contextTags: string[]): string {
   const exports: string[] = [
-    'export { client, setAuthToken, ensureBlobAxiosResponse } from "./client.js";',
+    'export { client, setAuthToken, clearAuthToken, ensureBlobAxiosResponse, setAuthRefreshHandler } from "./client.js";',
+    'export type { AuthRefreshHandler } from "./client.js";',
     'export { apiClient } from "./apiClient.js";',
     'export * from "./types/index.js";',
     "",
@@ -1356,7 +1423,19 @@ async function main(): Promise<void> {
   console.log(`  - manifest: ${manifestPath}`);
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+function isExecutedAsCli(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return resolve(entry) === resolve(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isExecutedAsCli()) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
