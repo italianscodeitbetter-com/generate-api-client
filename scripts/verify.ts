@@ -78,7 +78,25 @@ export async function verify(options: VerifyOptions = {}): Promise<void> {
   }
 }
 
+function printVerifyHelp(): void {
+  console.log(`Usage: api-client-verify [options]
+
+Verify that the OpenAPI spec and generated client still match api-client.manifest.json.
+Run this before production builds (see README).
+
+Options:
+  --help, -h     Show this message
+
+Typical npm script:
+  "build": "api-client-verify && tsc"
+`);
+}
+
 async function main(): Promise<void> {
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    printVerifyHelp();
+    return;
+  }
   try {
     await verify();
   } catch (err) {

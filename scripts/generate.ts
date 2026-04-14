@@ -73,6 +73,16 @@ function getDefaultUrl(): string {
   return "https://api.icib.dev/docs/?format=openapi";
 }
 
+type DefaultAuthKind = "none" | "jwt" | "cookie" | "custom";
+type DefaultAuthTiming = "lazy" | "immediate";
+
+export interface GenerateClientAuthOptions {
+  kind: Exclude<DefaultAuthKind, "none">;
+  timing: DefaultAuthTiming;
+  jwtAccessStorageKey?: string;
+  jwtRefreshStorageKey?: string;
+}
+
 interface CliArgs {
   url: string;
   out: string;
@@ -80,9 +90,40 @@ interface CliArgs {
   baseUrl?: string;
   overrideClient: boolean;
   yes: boolean;
+  defaultAuth: DefaultAuthKind;
+  defaultAuthTiming: DefaultAuthTiming;
+  jwtAccessStorageKey?: string;
+  jwtRefreshStorageKey?: string;
 }
 
-function parseArgs(): CliArgs {
+function printGenerateHelp(): void {
+  console.log(`Usage: api-client-generate [options]
+
+Generate a typed Axios client and types from an OpenAPI spec.
+
+Options:
+  --url <url>              Spec URL or file path (default: from BASE_URL or built-in default)
+  --out <dir>              Output directory (default: api)
+  --base-path, --basePath <path>   Path prefix merged into axios baseURL (default: BASE_PATH or empty)
+  --base-url, --baseUrl <origin>   Override API origin for client baseURL
+  --override-client        Overwrite client.ts if it already exists (otherwise left unchanged)
+  --yes, -y                With --override-client, skip the confirmation prompt (e.g. for CI)
+  --default-auth <kind>    Bake auth into client.ts: none (default), jwt, cookie, custom
+  --default-auth-timing <t>  lazy (default) = setDefaultAuthProfile on import; immediate = configureAuth
+  --jwt-access-key <key>   With --default-auth jwt, localStorage key for access token
+  --jwt-refresh-key <key>  With --default-auth jwt, localStorage key for refresh token
+  --help, -h               Show this message
+
+Environment:
+  BASE_URL                 Default spec URL and client base URL when not overridden
+  BASE_PATH                Default value for --base-path
+
+The generated client.ts includes optional auth profiles. Use --default-auth to embed a
+default at generate time, or setDefaultAuthProfile() / configureAuth() at runtime; see README.
+`);
+}
+
+function parseArgs(): CliArgs | null {
   const args = process.argv.slice(2);
   let url = getDefaultUrl();
   let out = DEFAULT_OUT;
@@ -90,8 +131,16 @@ function parseArgs(): CliArgs {
   let baseUrl: string | undefined = process.env.BASE_URL;
   let overrideClient = false;
   let yes = false;
+  let defaultAuth: DefaultAuthKind = "none";
+  let defaultAuthTiming: DefaultAuthTiming = "lazy";
+  let jwtAccessStorageKey: string | undefined;
+  let jwtRefreshStorageKey: string | undefined;
 
   for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--help" || args[i] === "-h") {
+      printGenerateHelp();
+      return null;
+    }
     if (args[i] === "--url" && args[i + 1]) {
       url = args[++i];
     } else if (args[i] === "--out" && args[i + 1]) {
@@ -110,10 +159,44 @@ function parseArgs(): CliArgs {
       overrideClient = true;
     } else if (args[i] === "--yes" || args[i] === "-y") {
       yes = true;
+    } else if (args[i] === "--default-auth" && args[i + 1]) {
+      const v = args[++i].toLowerCase();
+      if (v !== "none" && v !== "jwt" && v !== "cookie" && v !== "custom") {
+        throw new Error(
+          `Invalid --default-auth "${v}". Use none, jwt, cookie, or custom.`,
+        );
+      }
+      defaultAuth = v as DefaultAuthKind;
+    } else if (
+      (args[i] === "--default-auth-timing" || args[i] === "--default-auth-mode") &&
+      args[i + 1]
+    ) {
+      const v = args[++i].toLowerCase();
+      if (v !== "lazy" && v !== "immediate") {
+        throw new Error(
+          `Invalid --default-auth-timing "${v}". Use lazy or immediate.`,
+        );
+      }
+      defaultAuthTiming = v as DefaultAuthTiming;
+    } else if (args[i] === "--jwt-access-key" && args[i + 1]) {
+      jwtAccessStorageKey = args[++i];
+    } else if (args[i] === "--jwt-refresh-key" && args[i + 1]) {
+      jwtRefreshStorageKey = args[++i];
     }
   }
 
-  return { url, out, basePath, baseUrl, overrideClient, yes };
+  return {
+    url,
+    out,
+    basePath,
+    baseUrl,
+    overrideClient,
+    yes,
+    defaultAuth,
+    defaultAuthTiming,
+    jwtAccessStorageKey,
+    jwtRefreshStorageKey,
+  };
 }
 
 function askConfirmation(question: string): Promise<boolean> {
@@ -1142,7 +1225,37 @@ function generateContextFile(
   return lines.join("\n");
 }
 
-export function generateClient(baseUrl: string): string {
+export function buildDefaultAuthFooter(options: GenerateClientAuthOptions): string {
+  const jwtParts: string[] = ['kind: "jwt"'];
+  if (options.jwtAccessStorageKey) {
+    jwtParts.push(`accessStorageKey: ${JSON.stringify(options.jwtAccessStorageKey)}`);
+  }
+  if (options.jwtRefreshStorageKey) {
+    jwtParts.push(`refreshStorageKey: ${JSON.stringify(options.jwtRefreshStorageKey)}`);
+  }
+  const jwtObject = `{ ${jwtParts.join(", ")} }`;
+
+  const fn = options.timing === "lazy" ? "setDefaultAuthProfile" : "configureAuth";
+  const argument =
+    options.kind === "jwt"
+      ? jwtObject
+      : options.kind === "cookie"
+        ? '{ kind: "cookie" }'
+        : '{ kind: "custom" }';
+
+  return `
+
+// Baked-in default auth (api-client-generate --default-auth ${options.kind} --default-auth-timing ${options.timing})
+${fn}(${argument});
+`;
+}
+
+export function generateClient(
+  baseUrl: string,
+  authOptions?: GenerateClientAuthOptions,
+): string {
+  const defaultAuthFooter =
+    authOptions !== undefined ? buildDefaultAuthFooter(authOptions) : "";
   return `// Auto-generated Axios client
 import axios, {
   type AxiosInstance,
@@ -1162,30 +1275,157 @@ declare module "axios" {
 
 const AUTH_RETRY_MAX = 3;
 
-let _token: string | null = null;
+const DEFAULT_JWT_ACCESS_KEY = "accessToken";
+const DEFAULT_JWT_REFRESH_KEY = "refreshToken";
 
-export function setAuthToken(token: string | null, callback?: (token: string | null) => void): void {
+export type JwtAuthSetup = {
+  kind: "jwt";
+  /** localStorage key for the access token (default: accessToken) */
+  accessStorageKey?: string;
+  /** localStorage key for the refresh token (default: refreshToken) */
+  refreshStorageKey?: string;
+};
+
+export type CookieAuthSetup = {
+  kind: "cookie";
+};
+
+export type CustomAuthSetup = {
+  kind: "custom";
+  /**
+   * When set, called for each request instead of the default Bearer header logic.
+   */
+  applyRequestAuth?: (config: InternalAxiosRequestConfig) => void;
+};
+
+export type AuthSetup = JwtAuthSetup | CookieAuthSetup | CustomAuthSetup;
+
+function canUseLocalStorage(): boolean {
+  return typeof localStorage !== "undefined" && typeof localStorage.getItem === "function";
+}
+
+function readStorage(key: string): string | null {
+  if (!canUseLocalStorage()) return null;
+  try {
+    const v = localStorage.getItem(key);
+    return v === "" ? null : v;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string | null): void {
+  if (!canUseLocalStorage()) return;
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {
+    /* quota, private mode */
+  }
+}
+
+let _authSetup: AuthSetup = { kind: "custom" };
+let _jwtAccessKey = DEFAULT_JWT_ACCESS_KEY;
+let _jwtRefreshKey = DEFAULT_JWT_REFRESH_KEY;
+
+/** True only after \`configureAuth\` — skips lazy default on first request. */
+let _configureAuthCalledByUser = false;
+/** Applied on the first request if \`_configureAuthCalledByUser\` is still false. */
+let _lazyDefaultAuth: AuthSetup | null = null;
+let _lazyDefaultAuthApplied = false;
+
+let _token: string | null = null;
+let _refreshToken: string | null = null;
+
+function jwtPersistAccess(value: string | null): void {
+  if (_authSetup.kind !== "jwt") return;
+  writeStorage(_jwtAccessKey, value);
+}
+
+function jwtPersistRefresh(value: string | null): void {
+  if (_authSetup.kind !== "jwt") return;
+  writeStorage(_jwtRefreshKey, value);
+}
+
+export type AuthTokens = {
+  accessToken: string | null;
+  refreshToken?: string | null;
+};
+
+function setAuthTokenString(
+  token: string | null,
+  callback?: (token: string | null) => void,
+): void {
   _token = token;
+  jwtPersistAccess(token);
   if (callback) callback(token);
-  // insert your own logic here, e.g. save to localStorage, sessionStorage, etc.
+}
+
+function setAuthTokenObject(
+  tokens: AuthTokens,
+  callback?: (tokens: AuthTokens) => void,
+): void {
+  _token = tokens.accessToken;
+  jwtPersistAccess(tokens.accessToken);
+  if (tokens.refreshToken !== undefined) {
+    _refreshToken = tokens.refreshToken;
+    jwtPersistRefresh(tokens.refreshToken);
+  }
+  if (callback) callback(tokens);
+}
+
+export function setAuthToken(
+  token: string | null,
+  callback?: (token: string | null) => void,
+): void;
+export function setAuthToken(
+  tokens: AuthTokens,
+  callback?: (tokens: AuthTokens) => void,
+): void;
+export function setAuthToken(
+  tokenOrTokens: string | null | AuthTokens,
+  callback?: ((token: string | null) => void) | ((tokens: AuthTokens) => void),
+): void {
+  if (
+    tokenOrTokens !== null &&
+    typeof tokenOrTokens === "object" &&
+    "accessToken" in tokenOrTokens
+  ) {
+    setAuthTokenObject(tokenOrTokens, callback as (tokens: AuthTokens) => void | undefined);
+  } else {
+    setAuthTokenString(tokenOrTokens as string | null, callback as (token: string | null) => void | undefined);
+  }
+}
+
+export function setRefreshToken(
+  refreshToken: string | null,
+  callback?: (refreshToken: string | null) => void,
+): void {
+  _refreshToken = refreshToken;
+  jwtPersistRefresh(refreshToken);
+  if (callback) callback(refreshToken);
 }
 
 export function getAuthToken(): string | null {
   return _token;
 }
 
+export function getRefreshToken(): string | null {
+  return _refreshToken;
+}
+
 export function clearAuthToken(): void {
   _token = null;
-  // insert your own logic here
+  _refreshToken = null;
+  jwtPersistAccess(null);
+  jwtPersistRefresh(null);
 }
 
 /**
- * The \`saveToken\` argument passed to your refresh handler is \`setAuthToken\`
- * (memory + optional per-call persistence callback).
+ * The \`saveToken\` argument is \`setAuthToken\` (memory + optional persistence callback;
+ * object form updates access and optional refresh, and persists both in JWT profile).
  */
-export type AuthRefreshHandler = (
-  saveToken: typeof setAuthToken,
-) => Promise<void>;
+export type AuthRefreshHandler = (saveToken: typeof setAuthToken) => Promise<void>;
 
 let _refreshHandler: AuthRefreshHandler | null = null;
 let _refreshInFlight: Promise<void> | null = null;
@@ -1201,7 +1441,83 @@ export const client: AxiosInstance = axios.create({
   },
 });
 
+type TokenHydrate = "replace" | "merge";
+
+function applyAuthSetup(setup: AuthSetup, tokenHydrate: TokenHydrate): void {
+  _authSetup = setup;
+
+  if (setup.kind === "jwt") {
+    _jwtAccessKey = setup.accessStorageKey ?? DEFAULT_JWT_ACCESS_KEY;
+    _jwtRefreshKey = setup.refreshStorageKey ?? DEFAULT_JWT_REFRESH_KEY;
+    const fromAccess = readStorage(_jwtAccessKey);
+    const fromRefresh = readStorage(_jwtRefreshKey);
+    if (tokenHydrate === "replace") {
+      _token = fromAccess;
+      _refreshToken = fromRefresh;
+    } else {
+      _token = _token ?? fromAccess;
+      _refreshToken = _refreshToken ?? fromRefresh;
+    }
+    client.defaults.withCredentials = false;
+    return;
+  }
+
+  if (setup.kind === "cookie") {
+    client.defaults.withCredentials = true;
+    return;
+  }
+
+  client.defaults.withCredentials = false;
+}
+
+/**
+ * Opt-in default auth profile, applied automatically on the **first** outgoing request
+ * if you never call \`configureAuth\`. Use \`configureAuth\` when you want to set (or change)
+ * the profile immediately (e.g. hydrate JWT from \`localStorage\` before any token calls).
+ *
+ * Pass \`null\` to clear a pending default (only affects behavior before the first lazy apply).
+ */
+export function setDefaultAuthProfile(setup: AuthSetup | null): void {
+  _lazyDefaultAuth = setup;
+}
+
+export function configureAuth(setup: AuthSetup): void {
+  _configureAuthCalledByUser = true;
+  applyAuthSetup(setup, "replace");
+}
+
+/**
+ * Clears lazy-default registration and returns to the implicit \`custom\` profile as if the
+ * module had just loaded (\`configureAuth\` not yet called). Does not clear tokens—use
+ * \`clearAuthToken\`. Handy in tests when mixing \`setDefaultAuthProfile\` and \`configureAuth\`.
+ */
+export function resetAuthProfileState(): void {
+  _configureAuthCalledByUser = false;
+  _lazyDefaultAuth = null;
+  _lazyDefaultAuthApplied = false;
+  _authSetup = { kind: "custom" };
+  _jwtAccessKey = DEFAULT_JWT_ACCESS_KEY;
+  _jwtRefreshKey = DEFAULT_JWT_REFRESH_KEY;
+  client.defaults.withCredentials = false;
+}
+
 client.interceptors.request.use((config) => {
+  if (
+    !_configureAuthCalledByUser &&
+    _lazyDefaultAuth &&
+    !_lazyDefaultAuthApplied
+  ) {
+    applyAuthSetup(_lazyDefaultAuth, "merge");
+    _lazyDefaultAuthApplied = true;
+  }
+
+  if (_authSetup.kind === "cookie") {
+    return config;
+  }
+  if (_authSetup.kind === "custom" && _authSetup.applyRequestAuth) {
+    _authSetup.applyRequestAuth(config);
+    return config;
+  }
   if (_token) {
     config.headers.Authorization = \`Bearer \${_token}\`;
   }
@@ -1330,7 +1646,7 @@ export function triggerBlobDownload(
   a.click();
   URL.revokeObjectURL(url);
 }
-`;
+${defaultAuthFooter}`;
 }
 
 function generateApiClient(contextTags: string[]): string {
@@ -1353,8 +1669,8 @@ ${props},
 
 function generateIndex(contextTags: string[]): string {
   const exports: string[] = [
-    'export { client, setAuthToken, clearAuthToken, ensureBlobAxiosResponse, setAuthRefreshHandler } from "./client.js";',
-    'export type { AuthRefreshHandler } from "./client.js";',
+    'export { client, setAuthToken, setRefreshToken, getAuthToken, getRefreshToken, clearAuthToken, configureAuth, setDefaultAuthProfile, resetAuthProfileState, ensureBlobAxiosResponse, setAuthRefreshHandler } from "./client.js";',
+    'export type { AuthRefreshHandler, AuthSetup, AuthTokens, JwtAuthSetup, CookieAuthSetup, CustomAuthSetup } from "./client.js";',
     'export { apiClient } from "./apiClient.js";',
     'export * from "./types/index.js";',
     "",
@@ -1382,6 +1698,8 @@ interface Manifest {
 }
 
 async function main(): Promise<void> {
+  const parsed = parseArgs();
+  if (!parsed) return;
   const {
     url,
     out,
@@ -1389,7 +1707,22 @@ async function main(): Promise<void> {
     baseUrl: baseUrlOverride,
     overrideClient,
     yes,
-  } = parseArgs();
+    defaultAuth,
+    defaultAuthTiming,
+    jwtAccessStorageKey,
+    jwtRefreshStorageKey,
+  } = parsed;
+
+  const generateClientAuthOptions: GenerateClientAuthOptions | undefined =
+    defaultAuth === "none"
+      ? undefined
+      : {
+          kind: defaultAuth,
+          timing: defaultAuthTiming,
+          jwtAccessStorageKey,
+          jwtRefreshStorageKey,
+        };
+
   console.log(`Fetching spec from ${url}...`);
 
   const rawSpec = await loadRawSpec(url);
@@ -1449,7 +1782,10 @@ async function main(): Promise<void> {
     }
   }
   if (writeClient) {
-    writeFileSync(clientPath, generateClient(clientBaseUrl));
+    writeFileSync(
+      clientPath,
+      generateClient(clientBaseUrl, generateClientAuthOptions),
+    );
   }
 
   const sortedTags = [...byTag.keys()].sort();
@@ -1484,7 +1820,13 @@ async function main(): Promise<void> {
 
   console.log(`Generated API client in ${outDir}`);
   console.log(`  - types/index.ts`);
-  console.log(`  - client.ts${writeClient ? "" : " (skipped, use --override-client to overwrite)"}`);
+  console.log(
+    `  - client.ts${writeClient ? "" : " (skipped, use --override-client to overwrite)"}${
+      writeClient && generateClientAuthOptions
+        ? ` (baked auth: ${generateClientAuthOptions.kind}, ${generateClientAuthOptions.timing})`
+        : ""
+    }`,
+  );
   console.log(`  - apiClient.ts`);
   console.log(`  - contexts/*.ts (${sortedTags.length} files)`);
   console.log(`  - index.ts`);

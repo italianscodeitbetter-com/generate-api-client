@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { normalizedJsonHash, computeClientHash } from "../hash.js";
+import { buildDefaultAuthFooter } from "../generate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -199,6 +200,8 @@ describe("generate manifest", () => {
     expect(clientSource).toContain('responseType === "blob"');
     expect(clientSource).toContain('responseType === "arraybuffer"');
     expect(clientSource).toContain("setAuthRefreshHandler");
+    expect(clientSource).toContain("setDefaultAuthProfile");
+    expect(clientSource).toContain("configureAuth");
     expect(clientSource).toContain("AUTH_RETRY_MAX");
 
     const exportContext = readFileSync(
@@ -208,5 +211,65 @@ describe("generate manifest", () => {
     expect(exportContext).toContain('responseType: "blob"');
     expect(exportContext).toContain("ensureBlobAxiosResponse(_raw)");
     expect(exportContext).toContain("triggerBlobDownload(res.data");
+  });
+});
+
+describe("generate CLI", () => {
+  const scriptPath = join(projectRoot, "scripts", "generate.ts");
+  const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+
+  it("--help prints options and exits without fetching", () => {
+    const out = execSync(`"${tsxPath}" "${scriptPath}" --help`, {
+      encoding: "utf-8",
+    });
+    expect(out).toContain("--url");
+    expect(out).toContain("--override-client");
+    expect(out).toContain("setDefaultAuthProfile");
+    expect(out).toContain("--default-auth");
+    expect(out).toContain("configureAuth");
+  });
+});
+
+describe("buildDefaultAuthFooter", () => {
+  it("emits setDefaultAuthProfile for jwt lazy", () => {
+    expect(buildDefaultAuthFooter({ kind: "jwt", timing: "lazy" })).toContain(
+      'setDefaultAuthProfile({ kind: "jwt" })',
+    );
+  });
+
+  it("emits configureAuth for jwt immediate", () => {
+    expect(buildDefaultAuthFooter({ kind: "jwt", timing: "immediate" })).toContain(
+      'configureAuth({ kind: "jwt" })',
+    );
+  });
+
+  it("includes jwt storage keys when set", () => {
+    const s = buildDefaultAuthFooter({
+      kind: "jwt",
+      timing: "lazy",
+      jwtAccessStorageKey: "myAccess",
+      jwtRefreshStorageKey: "myRefresh",
+    });
+    expect(s).toContain("accessStorageKey");
+    expect(s).toContain("myAccess");
+    expect(s).toContain("myRefresh");
+  });
+});
+
+describe("generate embeds --default-auth", () => {
+  it("writes client.ts with baked lazy jwt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gen-baked-auth-"));
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api-baked --default-auth jwt --default-auth-timing lazy --override-client --yes`,
+      { cwd: dir },
+    );
+    const clientSource = readFileSync(
+      join(dir, "api-baked", "client.ts"),
+      "utf-8",
+    );
+    expect(clientSource).toContain("Baked-in default auth");
+    expect(clientSource).toContain('setDefaultAuthProfile({ kind: "jwt" })');
   });
 });

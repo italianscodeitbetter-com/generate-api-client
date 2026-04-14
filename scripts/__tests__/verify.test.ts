@@ -88,3 +88,16 @@ describe("verify", () => {
     await expect(verify({ cwd: tempDir })).rejects.toThrow();
   });
 });
+
+describe("verify CLI", () => {
+  const verifyScriptPath = join(projectRoot, "scripts", "verify.ts");
+  const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+
+  it("--help prints usage", () => {
+    const out = execSync(`"${tsxPath}" "${verifyScriptPath}" --help`, {
+      encoding: "utf-8",
+    });
+    expect(out).toContain("api-client-verify");
+    expect(out).toContain("manifest");
+  });
+});
