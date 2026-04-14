@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 
-import { readFileSync, mkdirSync, writeFileSync, existsSync } from "fs";
+import {
+  readFileSync,
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  realpathSync,
+} from "fs";
 import { createInterface } from "readline";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -1489,7 +1495,9 @@ function isExecutedAsCli(): boolean {
   const entry = process.argv[1];
   if (!entry) return false;
   try {
-    return resolve(entry) === resolve(fileURLToPath(import.meta.url));
+    const argvReal = realpathSync(resolve(entry));
+    const moduleReal = realpathSync(resolve(fileURLToPath(import.meta.url)));
+    return argvReal === moduleReal;
   } catch {
     return false;
   }

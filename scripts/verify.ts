@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { readFileSync, existsSync } from "fs";
-import { join } from "path";
+import { readFileSync, existsSync, realpathSync } from "fs";
+import { join, resolve } from "path";
 import { fileURLToPath } from "url";
 import {
   normalizedJsonHash,
@@ -88,7 +88,18 @@ async function main(): Promise<void> {
   }
 }
 
-const __filename = fileURLToPath(import.meta.url);
-if (process.argv[1] === __filename) {
+function isExecutedAsCli(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    const argvReal = realpathSync(resolve(entry));
+    const moduleReal = realpathSync(resolve(fileURLToPath(import.meta.url)));
+    return argvReal === moduleReal;
+  } catch {
+    return false;
+  }
+}
+
+if (isExecutedAsCli()) {
   main();
 }
