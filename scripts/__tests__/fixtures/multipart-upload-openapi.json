@@ -1,0 +1,65 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Multipart test API", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.example.com" }],
+  "paths": {
+    "/upload/csv": {
+      "post": {
+        "operationId": "UploadController_uploadCsv",
+        "summary": "Upload CSV for reconciliation",
+        "parameters": [
+          {
+            "name": "startDate",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "endDate",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": { "$ref": "#/components/schemas/CsvUploadBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "matched": { "type": "number" } }
+                }
+              }
+            }
+          }
+        },
+        "tags": ["upload"]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CsvUploadBody": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "CSV file"
+          },
+          "note": { "type": "string", "description": "Optional note" }
+        },
+        "required": ["file"]
+      }
+    }
+  }
+}

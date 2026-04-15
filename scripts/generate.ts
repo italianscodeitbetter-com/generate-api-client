@@ -12,6 +12,16 @@ import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import SwaggerParser from "@apidevtools/swagger-parser";
 import { normalizedJsonHash, computeClientHash } from "./hash.js";
+import {
+  buildClientTypeScript,
+  defaultClientGenOptions,
+  indexExportsForAuth,
+  type ClientGenOptions,
+  type ClientAuthMode,
+} from "./generate-client-template.js";
+
+export type { ClientGenOptions, ClientAuthMode } from "./generate-client-template.js";
+export { buildClientTypeScript, defaultClientGenOptions } from "./generate-client-template.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -73,16 +83,6 @@ function getDefaultUrl(): string {
   return "https://api.icib.dev/docs/?format=openapi";
 }
 
-type DefaultAuthKind = "none" | "jwt" | "cookie" | "custom";
-type DefaultAuthTiming = "lazy" | "immediate";
-
-export interface GenerateClientAuthOptions {
-  kind: Exclude<DefaultAuthKind, "none">;
-  timing: DefaultAuthTiming;
-  jwtAccessStorageKey?: string;
-  jwtRefreshStorageKey?: string;
-}
-
 interface CliArgs {
   url: string;
   out: string;
@@ -90,10 +90,20 @@ interface CliArgs {
   baseUrl?: string;
   overrideClient: boolean;
   yes: boolean;
-  defaultAuth: DefaultAuthKind;
-  defaultAuthTiming: DefaultAuthTiming;
+  auth: ClientAuthMode;
+  jwtInit: "eager" | "lazy";
   jwtAccessStorageKey?: string;
   jwtRefreshStorageKey?: string;
+}
+
+function cliArgsToClientGenOptions(args: CliArgs): ClientGenOptions {
+  const d = defaultClientGenOptions();
+  return {
+    auth: args.auth,
+    jwtInit: args.jwtInit,
+    jwtAccessStorageKey: args.jwtAccessStorageKey ?? d.jwtAccessStorageKey,
+    jwtRefreshStorageKey: args.jwtRefreshStorageKey ?? d.jwtRefreshStorageKey,
+  };
 }
 
 function printGenerateHelp(): void {
@@ -108,18 +118,19 @@ Options:
   --base-url, --baseUrl <origin>   Override API origin for client baseURL
   --override-client        Overwrite client.ts if it already exists (otherwise left unchanged)
   --yes, -y                With --override-client, skip the confirmation prompt (e.g. for CI)
-  --default-auth <kind>    Bake auth into client.ts: none (default), jwt, cookie, custom
-  --default-auth-timing <t>  lazy (default) = setDefaultAuthProfile on import; immediate = configureAuth
-  --jwt-access-key <key>   With --default-auth jwt, localStorage key for access token
-  --jwt-refresh-key <key>  With --default-auth jwt, localStorage key for refresh token
+  --auth <mode>            client.ts auth only: none (default), jwt, cookie, custom
+  --jwt-init <when>        With --auth jwt: lazy (default) or eager localStorage read
+  --jwt-access-key <key>   With --auth jwt, localStorage key for access (default: accessToken)
+  --jwt-refresh-key <key>  With --auth jwt, localStorage key for refresh (default: refreshToken)
+  --default-auth           Alias for --auth (deprecated)
+  --default-auth-timing    Alias: lazy|immediate maps to --jwt-init lazy|eager (jwt only)
   --help, -h               Show this message
 
 Environment:
   BASE_URL                 Default spec URL and client base URL when not overridden
   BASE_PATH                Default value for --base-path
 
-The generated client.ts includes optional auth profiles. Use --default-auth to embed a
-default at generate time, or setDefaultAuthProfile() / configureAuth() at runtime; see README.
+client.ts contains only the auth logic for the chosen --auth mode. See README.
 `);
 }
 
@@ -131,8 +142,8 @@ function parseArgs(): CliArgs | null {
   let baseUrl: string | undefined = process.env.BASE_URL;
   let overrideClient = false;
   let yes = false;
-  let defaultAuth: DefaultAuthKind = "none";
-  let defaultAuthTiming: DefaultAuthTiming = "lazy";
+  let auth: ClientAuthMode = "none";
+  let jwtInit: "eager" | "lazy" = "lazy";
   let jwtAccessStorageKey: string | undefined;
   let jwtRefreshStorageKey: string | undefined;
 
@@ -159,25 +170,35 @@ function parseArgs(): CliArgs | null {
       overrideClient = true;
     } else if (args[i] === "--yes" || args[i] === "-y") {
       yes = true;
-    } else if (args[i] === "--default-auth" && args[i + 1]) {
-      const v = args[++i].toLowerCase();
-      if (v !== "none" && v !== "jwt" && v !== "cookie" && v !== "custom") {
-        throw new Error(
-          `Invalid --default-auth "${v}". Use none, jwt, cookie, or custom.`,
-        );
-      }
-      defaultAuth = v as DefaultAuthKind;
     } else if (
-      (args[i] === "--default-auth-timing" || args[i] === "--default-auth-mode") &&
+      (args[i] === "--auth" || args[i] === "--default-auth") &&
       args[i + 1]
     ) {
       const v = args[++i].toLowerCase();
-      if (v !== "lazy" && v !== "immediate") {
+      if (v !== "none" && v !== "jwt" && v !== "cookie" && v !== "custom") {
         throw new Error(
-          `Invalid --default-auth-timing "${v}". Use lazy or immediate.`,
+          `Invalid --auth "${v}". Use none, jwt, cookie, or custom.`,
         );
       }
-      defaultAuthTiming = v as DefaultAuthTiming;
+      auth = v as ClientAuthMode;
+    } else if (
+      (args[i] === "--jwt-init" ||
+        args[i] === "--default-auth-timing" ||
+        args[i] === "--default-auth-mode") &&
+      args[i + 1]
+    ) {
+      const v = args[++i].toLowerCase();
+      if (v === "immediate") {
+        jwtInit = "eager";
+      } else if (v === "lazy") {
+        jwtInit = "lazy";
+      } else if (v === "eager") {
+        jwtInit = "eager";
+      } else {
+        throw new Error(
+          `Invalid --jwt-init "${v}". Use lazy, eager, or (deprecated) immediate.`,
+        );
+      }
     } else if (args[i] === "--jwt-access-key" && args[i + 1]) {
       jwtAccessStorageKey = args[++i];
     } else if (args[i] === "--jwt-refresh-key" && args[i + 1]) {
@@ -192,8 +213,8 @@ function parseArgs(): CliArgs | null {
     baseUrl,
     overrideClient,
     yes,
-    defaultAuth,
-    defaultAuthTiming,
+    auth,
+    jwtInit,
     jwtAccessStorageKey,
     jwtRefreshStorageKey,
   };
@@ -378,24 +399,91 @@ function getResponseSchema(response: unknown): SchemaObject | undefined {
   return undefined;
 }
 
+type MultipartFieldKind = "binary" | "arrayBinary" | "primitive";
+
 /**
- * Extract request body schema from OpenAPI 3.0 requestBody.content.
+ * Pick request body schema from OpenAPI 3.0 requestBody.content.
+ * Prefers application/json when present (same operation may list JSON + multipart).
  * OpenAPI 2.0 uses parameters with in: "body" (handled separately in extractOperations).
  */
-function getRequestBodySchema(requestBody: unknown): SchemaObject | undefined {
+function getRequestBodySelection(
+  requestBody: unknown,
+): { schema: SchemaObject; isMultipart: boolean } | undefined {
   if (!requestBody || typeof requestBody !== "object") return undefined;
   const rb = requestBody as Record<string, unknown>;
   const content = rb.content as
     | Record<string, { schema?: SchemaObject }>
     | undefined;
-  if (content) {
-    const jsonContent =
-      content["application/json"] ??
-      content["*/*"] ??
-      Object.values(content)[0];
-    return jsonContent?.schema;
+  if (!content || typeof content !== "object") return undefined;
+
+  const jsonSchema = content["application/json"]?.schema;
+  if (jsonSchema) return { schema: jsonSchema, isMultipart: false };
+
+  const starSchema = content["*/*"]?.schema;
+  if (starSchema) return { schema: starSchema, isMultipart: false };
+
+  const multipartSchema = content["multipart/form-data"]?.schema;
+  if (multipartSchema) return { schema: multipartSchema, isMultipart: true };
+
+  const first = Object.entries(content).find(
+    (entry): entry is [string, { schema: SchemaObject }] => {
+      const v = entry[1];
+      return Boolean(v && typeof v === "object" && v.schema);
+    },
+  );
+  if (first) {
+    const [mime, { schema }] = first;
+    return { schema, isMultipart: mime === "multipart/form-data" };
   }
   return undefined;
+}
+
+/**
+ * Flat multipart body: only top-level object properties. Returns null if shape is unsupported.
+ */
+function computeMultipartFormFields(
+  doc: ParsedSpec,
+  schema: SchemaObject | undefined,
+): Array<{
+  key: string;
+  required: boolean;
+  kind: MultipartFieldKind;
+}> | null {
+  if (!schema) return null;
+  const resolved = derefOpenApiFragment(doc, schema) as SchemaObject;
+  if (!resolved.properties || typeof resolved.properties !== "object") {
+    return null;
+  }
+  const required = new Set(resolved.required ?? []);
+  const fields: Array<{
+    key: string;
+    required: boolean;
+    kind: MultipartFieldKind;
+  }> = [];
+
+  for (const [key, propSchemaRaw] of Object.entries(resolved.properties)) {
+    const prop = derefOpenApiFragment(doc, propSchemaRaw) as SchemaObject;
+    if (prop.allOf?.length) return null;
+    if (prop.type === "array") {
+      const items = derefOpenApiFragment(doc, prop.items) as SchemaObject | undefined;
+      if (
+        items &&
+        items.type === "string" &&
+        items.format === "binary" &&
+        !items.allOf?.length
+      ) {
+        fields.push({ key, required: required.has(key), kind: "arrayBinary" });
+        continue;
+      }
+      return null;
+    }
+    if (prop.type === "string" && prop.format === "binary") {
+      fields.push({ key, required: required.has(key), kind: "binary" });
+      continue;
+    }
+    fields.push({ key, required: required.has(key), kind: "primitive" });
+  }
+  return fields;
 }
 
 function isNullableSchema(schema: SchemaObject): boolean {
@@ -590,6 +678,7 @@ function schemaToTsType(
     boolean: "boolean",
   };
   let t = prim[schema.type as string] ?? "unknown";
+  if (schema.format === "binary") t = "Blob | File";
   if (schema.format === "date-time" || schema.format === "date") t = "string";
   if (schema.format === "uri") t = "string";
   return nullable ? `${t} | null` : t;
@@ -700,6 +789,14 @@ interface Operation {
     schema: SchemaObject;
     propertyDescriptions?: Record<string, string>;
   } | null;
+  /** OpenAPI 3 multipart/form-data body (when JSON is not chosen for the same operation). */
+  isMultipart: boolean;
+  /** When set, method builds FormData from typed `data` using these keys. */
+  multipartFormFields?: Array<{
+    key: string;
+    required: boolean;
+    kind: MultipartFieldKind;
+  }>;
   responseType: string;
   producesBlob: boolean;
   summary?: string;
@@ -814,11 +911,20 @@ function extractOperations(
         }
       }
 
+      let isMultipart = false;
+      let multipartFormFields: Operation["multipartFormFields"];
+
       // OpenAPI 3.0: body in requestBody (OAS 2.0 uses parameters in: "body" above)
       if (!bodyParam && op.requestBody) {
         const resolvedBody = derefOpenApiFragment(doc, op.requestBody);
-        const bodySchema = getRequestBodySchema(resolvedBody);
-        if (bodySchema) {
+        const selection = getRequestBodySelection(resolvedBody);
+        if (selection) {
+          const bodySchema = selection.schema;
+          isMultipart = selection.isMultipart;
+          if (isMultipart) {
+            const plan = computeMultipartFormFields(doc, bodySchema);
+            if (plan && plan.length > 0) multipartFormFields = plan;
+          }
           const propertyDescriptions: Record<string, string> = {};
           if (bodySchema.properties) {
             for (const [propName, propSchema] of Object.entries(
@@ -870,6 +976,8 @@ function extractOperations(
         pathParams,
         queryParams,
         bodyParam,
+        isMultipart,
+        multipartFormFields,
         responseType: producesBlob ? "Blob" : responseType,
         producesBlob,
         summary: op.summary,
@@ -959,6 +1067,41 @@ function getTagDescription(doc: ParsedSpec, tag: string): string | undefined {
   return tags?.find((t) => t.name === tag)?.description;
 }
 
+function emitMultipartFormDataBuild(
+  fields: NonNullable<Operation["multipartFormFields"]>,
+): string[] {
+  const lines: string[] = [`      const _formData = new FormData();`];
+  const dk = (k: string) => `data[${JSON.stringify(k)}]`;
+  for (const f of fields) {
+    if (f.kind === "arrayBinary") {
+      lines.push(`      for (const _item of ${dk(f.key)} ?? []) {`);
+      lines.push(
+        `        _formData.append(${JSON.stringify(f.key)}, _item);`,
+      );
+      lines.push(`      }`);
+    } else if (f.kind === "binary") {
+      if (f.required) {
+        lines.push(
+          `      _formData.append(${JSON.stringify(f.key)}, ${dk(f.key)});`,
+        );
+      } else {
+        lines.push(
+          `      if (${dk(f.key)} !== undefined && ${dk(f.key)} !== null) _formData.append(${JSON.stringify(f.key)}, ${dk(f.key)});`,
+        );
+      }
+    } else if (f.required) {
+      lines.push(
+        `      _formData.append(${JSON.stringify(f.key)}, String(${dk(f.key)}));`,
+      );
+    } else {
+      lines.push(
+        `      if (${dk(f.key)} !== undefined && ${dk(f.key)} !== null) _formData.append(${JSON.stringify(f.key)}, String(${dk(f.key)}));`,
+      );
+    }
+  }
+  return lines;
+}
+
 function generateContextFile(
   tag: string,
   operations: Operation[],
@@ -1044,13 +1187,24 @@ function generateContextFile(
       : "";
 
     const needsBody = op.method !== "get" && op.method !== "delete";
+    const multipartAuto = Boolean(
+      op.bodyParam && op.isMultipart && op.multipartFormFields?.length,
+    );
     const bodyArg = op.bodyParam
-      ? `data: ${schemaToTsType(op.bodyParam.schema, definitions)}`
+      ? multipartAuto
+        ? `data: ${schemaToTsType(op.bodyParam.schema, definitions)}`
+        : op.isMultipart
+          ? `data: FormData`
+          : `data: ${schemaToTsType(op.bodyParam.schema, definitions)}`
       : needsBody
         ? `data?: FormData | Record<string, unknown>`
         : "";
     const optionsArg = op.producesBlob ? `options?: BlobDownloadOptions` : "";
-    const args = [paramsArg, bodyArg, optionsArg].filter(Boolean).join(", ");
+    const hasBodyInSignature = Boolean(bodyArg);
+    const args =
+      hasParams && hasBodyInSignature
+        ? [bodyArg, paramsArg, optionsArg].filter(Boolean).join(", ")
+        : [paramsArg, bodyArg, optionsArg].filter(Boolean).join(", ");
 
     let pathExpr = `"${op.path}"`;
     const pathParamNames = op.pathParams.map((p) => p.name);
@@ -1070,30 +1224,38 @@ function generateContextFile(
         jsdocParts.push(jsdocEscape(op.description));
       }
     }
-    if (op.pathParams.length > 0) {
-      for (const p of op.pathParams) {
-        const desc = p.description
-          ? jsdocEscape(p.description)
-          : "Path parameter";
-        jsdocParts.push(`@param params.${p.name} - ${desc}`);
-      }
+    const pathJsdocLines: string[] = [];
+    for (const p of op.pathParams) {
+      const desc = p.description
+        ? jsdocEscape(p.description)
+        : "Path parameter";
+      pathJsdocLines.push(`@param params.${p.name} - ${desc}`);
     }
+    const queryJsdocLines: string[] = [];
     for (const q of op.queryParams) {
       if (q.description) {
-        jsdocParts.push(
+        queryJsdocLines.push(
           `@param params.${q.name} - ${jsdocEscape(q.description)}`,
         );
       } else {
-        jsdocParts.push(`@param params.${q.name} - Query parameter`);
+        queryJsdocLines.push(`@param params.${q.name} - Query parameter`);
       }
     }
+    let bodyJsdocLine: string | undefined;
     if (op.bodyParam) {
       const bodyDesc = op.bodyParam.propertyDescriptions
         ? Object.entries(op.bodyParam.propertyDescriptions)
             .map(([k, v]) => `${k}: ${jsdocEscape(v)}`)
             .join("; ")
         : "Request body";
-      jsdocParts.push(`@param data - ${jsdocEscape(bodyDesc)}`);
+      bodyJsdocLine = `@param data - ${jsdocEscape(bodyDesc)}`;
+    }
+    if (hasParams && hasBodyInSignature) {
+      if (bodyJsdocLine) jsdocParts.push(bodyJsdocLine);
+      jsdocParts.push(...pathJsdocLines, ...queryJsdocLines);
+    } else {
+      jsdocParts.push(...pathJsdocLines, ...queryJsdocLines);
+      if (bodyJsdocLine) jsdocParts.push(bodyJsdocLine);
     }
     if (op.producesBlob) {
       jsdocParts.push(
@@ -1114,7 +1276,19 @@ function generateContextFile(
     }
     methodLines.push(`    async ${methodName}(${args}) {`);
 
+    if (multipartAuto) {
+      methodLines.push(
+        ...emitMultipartFormDataBuild(op.multipartFormFields!),
+      );
+    }
+
     const http = clientVar;
+    const bodySegment =
+      multipartAuto
+        ? ", _formData"
+        : op.bodyParam || needsBody
+          ? ", data"
+          : "";
     if (op.producesBlob) {
       if (op.method === "get" || op.method === "delete") {
         if (op.pathParams.length > 0 && op.queryParams.length > 0) {
@@ -1138,7 +1312,11 @@ function generateContextFile(
           );
         }
       } else {
-        const bodyVal = op.bodyParam || needsBody ? "data" : "undefined";
+        const bodyVal = multipartAuto
+          ? "_formData"
+          : op.bodyParam || needsBody
+            ? "data"
+            : "undefined";
         if (op.pathParams.length > 0 && op.queryParams.length > 0) {
           methodLines.push(
             `      const { ${pathParamNames.join(", ")}, ...query } = params ?? {};`,
@@ -1187,7 +1365,6 @@ function generateContextFile(
         );
       }
     } else {
-      const bodySegment = op.bodyParam || needsBody ? ", data" : "";
       if (op.pathParams.length > 0 && op.queryParams.length > 0) {
         methodLines.push(
           `      const { ${pathParamNames.join(", ")}, ...query } = params;`,
@@ -1225,428 +1402,13 @@ function generateContextFile(
   return lines.join("\n");
 }
 
-export function buildDefaultAuthFooter(options: GenerateClientAuthOptions): string {
-  const jwtParts: string[] = ['kind: "jwt"'];
-  if (options.jwtAccessStorageKey) {
-    jwtParts.push(`accessStorageKey: ${JSON.stringify(options.jwtAccessStorageKey)}`);
-  }
-  if (options.jwtRefreshStorageKey) {
-    jwtParts.push(`refreshStorageKey: ${JSON.stringify(options.jwtRefreshStorageKey)}`);
-  }
-  const jwtObject = `{ ${jwtParts.join(", ")} }`;
-
-  const fn = options.timing === "lazy" ? "setDefaultAuthProfile" : "configureAuth";
-  const argument =
-    options.kind === "jwt"
-      ? jwtObject
-      : options.kind === "cookie"
-        ? '{ kind: "cookie" }'
-        : '{ kind: "custom" }';
-
-  return `
-
-// Baked-in default auth (api-client-generate --default-auth ${options.kind} --default-auth-timing ${options.timing})
-${fn}(${argument});
-`;
-}
 
 export function generateClient(
   baseUrl: string,
-  authOptions?: GenerateClientAuthOptions,
+  partial?: Partial<ClientGenOptions>,
 ): string {
-  const defaultAuthFooter =
-    authOptions !== undefined ? buildDefaultAuthFooter(authOptions) : "";
-  return `// Auto-generated Axios client
-import axios, {
-  type AxiosInstance,
-  type AxiosResponse,
-  type InternalAxiosRequestConfig,
-} from "axios";
-
-declare module "axios" {
-  interface InternalAxiosRequestConfig {
-    /**
-     * When true, 401/403 on this request will not run the auth refresh handler.
-     * Set on refresh-token calls that use the same \`client\` to avoid retry loops.
-     */
-    skipAuthRefresh?: boolean;
-  }
-}
-
-const AUTH_RETRY_MAX = 3;
-
-const DEFAULT_JWT_ACCESS_KEY = "accessToken";
-const DEFAULT_JWT_REFRESH_KEY = "refreshToken";
-
-export type JwtAuthSetup = {
-  kind: "jwt";
-  /** localStorage key for the access token (default: accessToken) */
-  accessStorageKey?: string;
-  /** localStorage key for the refresh token (default: refreshToken) */
-  refreshStorageKey?: string;
-};
-
-export type CookieAuthSetup = {
-  kind: "cookie";
-};
-
-export type CustomAuthSetup = {
-  kind: "custom";
-  /**
-   * When set, called for each request instead of the default Bearer header logic.
-   */
-  applyRequestAuth?: (config: InternalAxiosRequestConfig) => void;
-};
-
-export type AuthSetup = JwtAuthSetup | CookieAuthSetup | CustomAuthSetup;
-
-function canUseLocalStorage(): boolean {
-  return typeof localStorage !== "undefined" && typeof localStorage.getItem === "function";
-}
-
-function readStorage(key: string): string | null {
-  if (!canUseLocalStorage()) return null;
-  try {
-    const v = localStorage.getItem(key);
-    return v === "" ? null : v;
-  } catch {
-    return null;
-  }
-}
-
-function writeStorage(key: string, value: string | null): void {
-  if (!canUseLocalStorage()) return;
-  try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, value);
-  } catch {
-    /* quota, private mode */
-  }
-}
-
-let _authSetup: AuthSetup = { kind: "custom" };
-let _jwtAccessKey = DEFAULT_JWT_ACCESS_KEY;
-let _jwtRefreshKey = DEFAULT_JWT_REFRESH_KEY;
-
-/** True only after \`configureAuth\` — skips lazy default on first request. */
-let _configureAuthCalledByUser = false;
-/** Applied on the first request if \`_configureAuthCalledByUser\` is still false. */
-let _lazyDefaultAuth: AuthSetup | null = null;
-let _lazyDefaultAuthApplied = false;
-
-let _token: string | null = null;
-let _refreshToken: string | null = null;
-
-function jwtPersistAccess(value: string | null): void {
-  if (_authSetup.kind !== "jwt") return;
-  writeStorage(_jwtAccessKey, value);
-}
-
-function jwtPersistRefresh(value: string | null): void {
-  if (_authSetup.kind !== "jwt") return;
-  writeStorage(_jwtRefreshKey, value);
-}
-
-export type AuthTokens = {
-  accessToken: string | null;
-  refreshToken?: string | null;
-};
-
-function setAuthTokenString(
-  token: string | null,
-  callback?: (token: string | null) => void,
-): void {
-  _token = token;
-  jwtPersistAccess(token);
-  if (callback) callback(token);
-}
-
-function setAuthTokenObject(
-  tokens: AuthTokens,
-  callback?: (tokens: AuthTokens) => void,
-): void {
-  _token = tokens.accessToken;
-  jwtPersistAccess(tokens.accessToken);
-  if (tokens.refreshToken !== undefined) {
-    _refreshToken = tokens.refreshToken;
-    jwtPersistRefresh(tokens.refreshToken);
-  }
-  if (callback) callback(tokens);
-}
-
-export function setAuthToken(
-  token: string | null,
-  callback?: (token: string | null) => void,
-): void;
-export function setAuthToken(
-  tokens: AuthTokens,
-  callback?: (tokens: AuthTokens) => void,
-): void;
-export function setAuthToken(
-  tokenOrTokens: string | null | AuthTokens,
-  callback?: ((token: string | null) => void) | ((tokens: AuthTokens) => void),
-): void {
-  if (
-    tokenOrTokens !== null &&
-    typeof tokenOrTokens === "object" &&
-    "accessToken" in tokenOrTokens
-  ) {
-    setAuthTokenObject(tokenOrTokens, callback as (tokens: AuthTokens) => void | undefined);
-  } else {
-    setAuthTokenString(tokenOrTokens as string | null, callback as (token: string | null) => void | undefined);
-  }
-}
-
-export function setRefreshToken(
-  refreshToken: string | null,
-  callback?: (refreshToken: string | null) => void,
-): void {
-  _refreshToken = refreshToken;
-  jwtPersistRefresh(refreshToken);
-  if (callback) callback(refreshToken);
-}
-
-export function getAuthToken(): string | null {
-  return _token;
-}
-
-export function getRefreshToken(): string | null {
-  return _refreshToken;
-}
-
-export function clearAuthToken(): void {
-  _token = null;
-  _refreshToken = null;
-  jwtPersistAccess(null);
-  jwtPersistRefresh(null);
-}
-
-/**
- * The \`saveToken\` argument is \`setAuthToken\` (memory + optional persistence callback;
- * object form updates access and optional refresh, and persists both in JWT profile).
- */
-export type AuthRefreshHandler = (saveToken: typeof setAuthToken) => Promise<void>;
-
-let _refreshHandler: AuthRefreshHandler | null = null;
-let _refreshInFlight: Promise<void> | null = null;
-
-export function setAuthRefreshHandler(handler: AuthRefreshHandler | null): void {
-  _refreshHandler = handler;
-}
-
-export const client: AxiosInstance = axios.create({
-  baseURL: "${baseUrl}",
-  headers: {
-    "Content-Type": "application/json",
-  },
-});
-
-type TokenHydrate = "replace" | "merge";
-
-function applyAuthSetup(setup: AuthSetup, tokenHydrate: TokenHydrate): void {
-  _authSetup = setup;
-
-  if (setup.kind === "jwt") {
-    _jwtAccessKey = setup.accessStorageKey ?? DEFAULT_JWT_ACCESS_KEY;
-    _jwtRefreshKey = setup.refreshStorageKey ?? DEFAULT_JWT_REFRESH_KEY;
-    const fromAccess = readStorage(_jwtAccessKey);
-    const fromRefresh = readStorage(_jwtRefreshKey);
-    if (tokenHydrate === "replace") {
-      _token = fromAccess;
-      _refreshToken = fromRefresh;
-    } else {
-      _token = _token ?? fromAccess;
-      _refreshToken = _refreshToken ?? fromRefresh;
-    }
-    client.defaults.withCredentials = false;
-    return;
-  }
-
-  if (setup.kind === "cookie") {
-    client.defaults.withCredentials = true;
-    return;
-  }
-
-  client.defaults.withCredentials = false;
-}
-
-/**
- * Opt-in default auth profile, applied automatically on the **first** outgoing request
- * if you never call \`configureAuth\`. Use \`configureAuth\` when you want to set (or change)
- * the profile immediately (e.g. hydrate JWT from \`localStorage\` before any token calls).
- *
- * Pass \`null\` to clear a pending default (only affects behavior before the first lazy apply).
- */
-export function setDefaultAuthProfile(setup: AuthSetup | null): void {
-  _lazyDefaultAuth = setup;
-}
-
-export function configureAuth(setup: AuthSetup): void {
-  _configureAuthCalledByUser = true;
-  applyAuthSetup(setup, "replace");
-}
-
-/**
- * Clears lazy-default registration and returns to the implicit \`custom\` profile as if the
- * module had just loaded (\`configureAuth\` not yet called). Does not clear tokens—use
- * \`clearAuthToken\`. Handy in tests when mixing \`setDefaultAuthProfile\` and \`configureAuth\`.
- */
-export function resetAuthProfileState(): void {
-  _configureAuthCalledByUser = false;
-  _lazyDefaultAuth = null;
-  _lazyDefaultAuthApplied = false;
-  _authSetup = { kind: "custom" };
-  _jwtAccessKey = DEFAULT_JWT_ACCESS_KEY;
-  _jwtRefreshKey = DEFAULT_JWT_REFRESH_KEY;
-  client.defaults.withCredentials = false;
-}
-
-client.interceptors.request.use((config) => {
-  if (
-    !_configureAuthCalledByUser &&
-    _lazyDefaultAuth &&
-    !_lazyDefaultAuthApplied
-  ) {
-    applyAuthSetup(_lazyDefaultAuth, "merge");
-    _lazyDefaultAuthApplied = true;
-  }
-
-  if (_authSetup.kind === "cookie") {
-    return config;
-  }
-  if (_authSetup.kind === "custom" && _authSetup.applyRequestAuth) {
-    _authSetup.applyRequestAuth(config);
-    return config;
-  }
-  if (_token) {
-    config.headers.Authorization = \`Bearer \${_token}\`;
-  }
-  return config;
-});
-
-client.interceptors.response.use(
-  (response) => {
-    const responseType = response.config.responseType;
-    if (responseType === "blob" || responseType === "arraybuffer") {
-      return response;
-    }
-    return response.data;
-  },
-  async (error: unknown) => {
-    if (!axios.isAxiosError(error) || !error.config) {
-      return Promise.reject(error);
-    }
-    const originalConfig = error.config as InternalAxiosRequestConfig & {
-      __authRetryCount?: number;
-    };
-    const status = error.response?.status;
-
-    if (originalConfig.skipAuthRefresh) {
-      if (status === 401) {
-        clearAuthToken();
-      }
-      return Promise.reject(error);
-    }
-
-    if ((status !== 401 && status !== 403) || !_refreshHandler) {
-      if (status === 401) {
-        clearAuthToken();
-      }
-      return Promise.reject(error);
-    }
-
-    const retries = originalConfig.__authRetryCount ?? 0;
-    if (retries >= AUTH_RETRY_MAX) {
-      if (status === 401) {
-        clearAuthToken();
-      }
-      return Promise.reject(error);
-    }
-
-    originalConfig.__authRetryCount = retries + 1;
-
-    try {
-      if (!_refreshInFlight) {
-        _refreshInFlight = _refreshHandler(setAuthToken).finally(() => {
-          _refreshInFlight = null;
-        });
-      }
-      await _refreshInFlight;
-    } catch {
-      if (status === 401) {
-        clearAuthToken();
-      }
-      return Promise.reject(error);
-    }
-
-    return client.request(originalConfig);
-  },
-);
-
-/**
- * Normalizes blob requests when an older client interceptor still returns only
- * \`response.data\` (Blob). Current template returns the full AxiosResponse for
- * blob/arraybuffer so headers stay available.
- */
-export function ensureBlobAxiosResponse(
-  value: Blob | AxiosResponse<Blob>,
-): AxiosResponse<Blob> {
-  if (
-    value &&
-    typeof value === "object" &&
-    "headers" in value &&
-    "config" in value &&
-    "status" in value
-  ) {
-    return value as AxiosResponse<Blob>;
-  }
-  return {
-    data: value as Blob,
-    status: 200,
-    statusText: "OK",
-    headers: {},
-    config: {} as InternalAxiosRequestConfig,
-  };
-}
-
-/** Options for blob/download endpoints */
-export interface BlobDownloadOptions {
-  /** When true, triggers a file download in the browser */
-  download?: boolean;
-  /** Suggested filename (falls back to Content-Disposition or default) */
-  filename?: string;
-}
-
-/** Headers type for blob download (compatible with Axios response headers) */
-export type BlobDownloadHeaders =
-  | import("axios").AxiosResponseHeaders
-  | import("axios").RawAxiosResponseHeaders
-  | Record<string, import("axios").AxiosHeaderValue>;
-
-/** Triggers a blob download in the browser. No-op in Node.js. */
-export function triggerBlobDownload(
-  blob: Blob,
-  headers: BlobDownloadHeaders,
-  suggestedFilename?: string
-): void {
-  if (typeof document === "undefined") return;
-  const cdRaw = "get" in headers && typeof (headers as import("axios").AxiosHeaders).get === "function"
-    ? (headers as import("axios").AxiosHeaders).get("content-disposition")
-    : (headers as Record<string, import("axios").AxiosHeaderValue>)["content-disposition"];
-  const cd = typeof cdRaw === "string" ? cdRaw : Array.isArray(cdRaw) ? cdRaw[0] : "";
-  const filename =
-    suggestedFilename ??
-    (cd && cd.includes("filename=")
-      ? cd.split("filename=")[1]?.replace(/^["']|["']$/g, "").trim()
-      : "download");
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-${defaultAuthFooter}`;
+  const o = { ...defaultClientGenOptions(), ...partial };
+  return buildClientTypeScript(baseUrl, o);
 }
 
 function generateApiClient(contextTags: string[]): string {
@@ -1667,10 +1429,11 @@ ${props},
 `;
 }
 
-function generateIndex(contextTags: string[]): string {
+function generateIndex(contextTags: string[], auth: ClientAuthMode): string {
+  const { clientExports, typeExports } = indexExportsForAuth(auth);
   const exports: string[] = [
-    'export { client, setAuthToken, setRefreshToken, getAuthToken, getRefreshToken, clearAuthToken, configureAuth, setDefaultAuthProfile, resetAuthProfileState, ensureBlobAxiosResponse, setAuthRefreshHandler } from "./client.js";',
-    'export type { AuthRefreshHandler, AuthSetup, AuthTokens, JwtAuthSetup, CookieAuthSetup, CustomAuthSetup } from "./client.js";',
+    clientExports,
+    typeExports,
     'export { apiClient } from "./apiClient.js";',
     'export * from "./types/index.js";',
     "",
@@ -1707,21 +1470,13 @@ async function main(): Promise<void> {
     baseUrl: baseUrlOverride,
     overrideClient,
     yes,
-    defaultAuth,
-    defaultAuthTiming,
+    auth,
+    jwtInit,
     jwtAccessStorageKey,
     jwtRefreshStorageKey,
   } = parsed;
 
-  const generateClientAuthOptions: GenerateClientAuthOptions | undefined =
-    defaultAuth === "none"
-      ? undefined
-      : {
-          kind: defaultAuth,
-          timing: defaultAuthTiming,
-          jwtAccessStorageKey,
-          jwtRefreshStorageKey,
-        };
+  const clientGenOptions = cliArgsToClientGenOptions(parsed);
 
   console.log(`Fetching spec from ${url}...`);
 
@@ -1782,10 +1537,7 @@ async function main(): Promise<void> {
     }
   }
   if (writeClient) {
-    writeFileSync(
-      clientPath,
-      generateClient(clientBaseUrl, generateClientAuthOptions),
-    );
+    writeFileSync(clientPath, generateClient(clientBaseUrl, clientGenOptions));
   }
 
   const sortedTags = [...byTag.keys()].sort();
@@ -1802,7 +1554,7 @@ async function main(): Promise<void> {
   }
 
   writeFileSync(join(outDir, "apiClient.ts"), generateApiClient(sortedTags));
-  writeFileSync(join(outDir, "index.ts"), generateIndex(sortedTags));
+  writeFileSync(join(outDir, "index.ts"), generateIndex(sortedTags, auth));
 
   const docsHash = normalizedJsonHash(rawSpec);
   const clientHash = computeClientHash(cwd, out);
@@ -1822,9 +1574,7 @@ async function main(): Promise<void> {
   console.log(`  - types/index.ts`);
   console.log(
     `  - client.ts${writeClient ? "" : " (skipped, use --override-client to overwrite)"}${
-      writeClient && generateClientAuthOptions
-        ? ` (baked auth: ${generateClientAuthOptions.kind}, ${generateClientAuthOptions.timing})`
-        : ""
+      writeClient ? ` (--auth ${auth}${auth === "jwt" ? `, ${jwtInit}` : ""})` : ""
     }`,
   );
   console.log(`  - apiClient.ts`);

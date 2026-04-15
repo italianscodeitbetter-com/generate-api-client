@@ -6,7 +6,7 @@ import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { normalizedJsonHash, computeClientHash } from "../hash.js";
-import { buildDefaultAuthFooter } from "../generate.js";
+import { buildClientTypeScript, defaultClientGenOptions } from "../generate-client-template.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -45,6 +45,13 @@ const openapi3ParameterRefsFixturePath = join(
   "__tests__",
   "fixtures",
   "openapi3-parameter-refs.json",
+);
+const multipartUploadFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "multipart-upload-openapi.json",
 );
 
 describe("generate manifest", () => {
@@ -185,6 +192,33 @@ describe("generate manifest", () => {
     expect(thingsContext).toMatch(/params[^)]*page/);
   });
 
+  it("multipart/form-data builds FormData and types binary fields as Blob | File", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${multipartUploadFixturePath}" --out api-multipart`,
+      { cwd: tempDir },
+    );
+
+    const typesSource = readFileSync(
+      join(tempDir, "api-multipart", "types", "index.ts"),
+      "utf-8",
+    );
+    expect(typesSource).toMatch(/Blob\s*\|\s*File/);
+
+    const uploadContext = readFileSync(
+      join(tempDir, "api-multipart", "contexts", "upload.ts"),
+      "utf-8",
+    );
+    expect(uploadContext).toContain("new FormData()");
+    expect(uploadContext).toContain("_formData.append(");
+    expect(uploadContext).toContain(", _formData,");
+    expect(uploadContext).not.toMatch(/\.post<[^>]+>\([^,]+,\s*data,/);
+    expect(uploadContext).toMatch(
+      /async uploadCsv\(data:[^)]+\bparams\b/s,
+    );
+  });
+
   it("leaves full Axios response for blob endpoints so res.data and headers work", async () => {
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
@@ -200,8 +234,6 @@ describe("generate manifest", () => {
     expect(clientSource).toContain('responseType === "blob"');
     expect(clientSource).toContain('responseType === "arraybuffer"');
     expect(clientSource).toContain("setAuthRefreshHandler");
-    expect(clientSource).toContain("setDefaultAuthProfile");
-    expect(clientSource).toContain("configureAuth");
     expect(clientSource).toContain("AUTH_RETRY_MAX");
 
     const exportContext = readFileSync(
@@ -224,52 +256,54 @@ describe("generate CLI", () => {
     });
     expect(out).toContain("--url");
     expect(out).toContain("--override-client");
-    expect(out).toContain("setDefaultAuthProfile");
-    expect(out).toContain("--default-auth");
-    expect(out).toContain("configureAuth");
+    expect(out).toContain("--auth");
+    expect(out).toContain("--jwt-init");
   });
 });
 
-describe("buildDefaultAuthFooter", () => {
-  it("emits setDefaultAuthProfile for jwt lazy", () => {
-    expect(buildDefaultAuthFooter({ kind: "jwt", timing: "lazy" })).toContain(
-      'setDefaultAuthProfile({ kind: "jwt" })',
-    );
-  });
-
-  it("emits configureAuth for jwt immediate", () => {
-    expect(buildDefaultAuthFooter({ kind: "jwt", timing: "immediate" })).toContain(
-      'configureAuth({ kind: "jwt" })',
-    );
-  });
-
-  it("includes jwt storage keys when set", () => {
-    const s = buildDefaultAuthFooter({
-      kind: "jwt",
-      timing: "lazy",
-      jwtAccessStorageKey: "myAccess",
-      jwtRefreshStorageKey: "myRefresh",
+describe("buildClientTypeScript", () => {
+  it("jwt lazy includes lazy hydration and localStorage helpers", () => {
+    const src = buildClientTypeScript("http://t", {
+      ...defaultClientGenOptions(),
+      auth: "jwt",
+      jwtInit: "lazy",
     });
-    expect(s).toContain("accessStorageKey");
-    expect(s).toContain("myAccess");
-    expect(s).toContain("myRefresh");
+    expect(src).toContain("_jwtHydrated");
+    expect(src).toContain("readStorage");
+  });
+
+  it("none mode has no jwt localStorage helpers", () => {
+    const src = buildClientTypeScript("http://t", {
+      ...defaultClientGenOptions(),
+      auth: "none",
+    });
+    expect(src).not.toContain("readStorage");
+    expect(src).not.toContain("_jwtHydrated");
+  });
+
+  it("custom mode includes applyRequestAuth stub", () => {
+    const src = buildClientTypeScript("http://t", {
+      ...defaultClientGenOptions(),
+      auth: "custom",
+    });
+    expect(src).toContain("function applyRequestAuth");
   });
 });
 
-describe("generate embeds --default-auth", () => {
-  it("writes client.ts with baked lazy jwt", () => {
+describe("generate --auth jwt", () => {
+  it("writes client.ts with jwt lazy implementation", () => {
     const dir = mkdtempSync(join(tmpdir(), "gen-baked-auth-"));
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     execSync(
-      `"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api-baked --default-auth jwt --default-auth-timing lazy --override-client --yes`,
+      `"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api-baked --auth jwt --jwt-init lazy --override-client --yes`,
       { cwd: dir },
     );
     const clientSource = readFileSync(
       join(dir, "api-baked", "client.ts"),
       "utf-8",
     );
-    expect(clientSource).toContain("Baked-in default auth");
-    expect(clientSource).toContain('setDefaultAuthProfile({ kind: "jwt" })');
+    expect(clientSource).toContain("_jwtHydrated");
+    expect(clientSource).toContain("persistAccess");
   });
 });

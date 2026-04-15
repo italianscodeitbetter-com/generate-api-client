@@ -9,7 +9,8 @@ import { generateClient } from "../generate.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_DIR = join(__dirname, ".runtime-gen");
-const RUNTIME_CLIENT = join(RUNTIME_DIR, "generated-client.ts");
+const RUNTIME_NONE = join(RUNTIME_DIR, "generated-none.ts");
+const RUNTIME_JWT = join(RUNTIME_DIR, "generated-jwt.ts");
 
 type SaveToken = {
   (token: string | null, callback?: (token: string | null) => void): void;
@@ -43,42 +44,31 @@ interface LoadedClient {
   clearAuthToken: () => void;
   getAuthToken: () => string | null;
   getRefreshToken: () => string | null;
-  configureAuth: (setup: { kind: string; [k: string]: unknown }) => void;
-  setDefaultAuthProfile: (
-    setup: { kind: string; [k: string]: unknown } | null,
-  ) => void;
-  resetAuthProfileState: () => void;
   setAuthRefreshHandler: (handler: RefreshHandler | null) => void;
 }
 
-describe("generated client (auth refresh)", () => {
+describe("generated client (auth refresh, bearer memory)", () => {
   let mod: LoadedClient;
   let mock: MockAdapter;
 
   beforeAll(async () => {
     mkdirSync(RUNTIME_DIR, { recursive: true });
     writeFileSync(
-      RUNTIME_CLIENT,
-      generateClient("http://auth-refresh.test"),
+      RUNTIME_NONE,
+      generateClient("http://auth-refresh.test", { auth: "none" }),
       "utf-8",
     );
-    const url = pathToFileURL(RUNTIME_CLIENT).href;
+    const url = pathToFileURL(RUNTIME_NONE).href;
     mod = (await import(url)) as LoadedClient;
     mock = new MockAdapter(mod.client as never);
   });
 
   afterAll(() => {
     mock.restore();
-    try {
-      rmSync(RUNTIME_DIR, { recursive: true, force: true });
-    } catch {
-      /* temp cleanup best-effort */
-    }
   });
 
   beforeEach(() => {
     mock.reset();
-    mod.resetAuthProfileState();
     mod.clearAuthToken();
     mod.setAuthRefreshHandler(null);
   });
@@ -167,47 +157,6 @@ describe("generated client (auth refresh)", () => {
     expect(mod.getRefreshToken()).toBe("nr");
   });
 
-  it("jwt profile persists access and refresh to localStorage", () => {
-    const store: Record<string, string> = {};
-    const prev = globalThis.localStorage;
-    Object.defineProperty(globalThis, "localStorage", {
-      value: {
-        getItem: (k: string) => (k in store ? store[k] : null),
-        setItem: (k: string, v: string) => {
-          store[k] = v;
-        },
-        removeItem: (k: string) => {
-          delete store[k];
-        },
-      },
-      configurable: true,
-    });
-
-    try {
-      mod.configureAuth({
-        kind: "jwt",
-        accessStorageKey: "a",
-        refreshStorageKey: "r",
-      });
-      mod.setAuthToken({ accessToken: "acc", refreshToken: "ref" });
-      expect(store.a).toBe("acc");
-      expect(store.r).toBe("ref");
-      mod.clearAuthToken();
-      expect(store.a).toBeUndefined();
-      expect(store.r).toBeUndefined();
-    } finally {
-      if (prev === undefined) {
-        Reflect.deleteProperty(globalThis, "localStorage");
-      } else {
-        Object.defineProperty(globalThis, "localStorage", {
-          value: prev,
-          configurable: true,
-          writable: true,
-        });
-      }
-    }
-  });
-
   it("failed refresh rejects and clears token on 401", async () => {
     mod.setAuthToken("old");
     mod.setAuthRefreshHandler(async () => {
@@ -272,58 +221,45 @@ describe("generated client (auth refresh)", () => {
     expect(b).toEqual({ which: "b" });
     expect(refreshRuns).toBe(1);
   });
+});
 
-  it("lazy default jwt applies on first request and loads Bearer from localStorage", async () => {
-    const store: Record<string, string> = {
-      accessToken: "from-ls",
-      refreshToken: "rt",
-    };
-    const prev = globalThis.localStorage;
-    Object.defineProperty(globalThis, "localStorage", {
-      value: {
-        getItem: (k: string) => (k in store ? store[k] : null),
-        setItem: (k: string, v: string) => {
-          store[k] = v;
-        },
-        removeItem: (k: string) => {
-          delete store[k];
-        },
-      },
-      configurable: true,
-    });
+describe("generated client (jwt + localStorage)", () => {
+  let mod: LoadedClient;
+  let mock: MockAdapter;
 
+  beforeAll(async () => {
+    mkdirSync(RUNTIME_DIR, { recursive: true });
+    writeFileSync(
+      RUNTIME_JWT,
+      generateClient("http://auth-refresh.test", {
+        auth: "jwt",
+        jwtInit: "lazy",
+        jwtAccessStorageKey: "a",
+        jwtRefreshStorageKey: "r",
+      }),
+      "utf-8",
+    );
+    const url = pathToFileURL(RUNTIME_JWT).href;
+    mod = (await import(url)) as LoadedClient;
+    mock = new MockAdapter(mod.client as never);
+  });
+
+  afterAll(() => {
+    mock.restore();
     try {
-      mod.setDefaultAuthProfile({ kind: "jwt" });
-      let authHeader: string | undefined;
-      mock.onGet("/hdr").reply((config) => {
-        authHeader = config.headers?.Authorization as string;
-        return [200, { ok: true }];
-      });
-      await mod.client.get("/hdr");
-      expect(authHeader).toBe("Bearer from-ls");
-      expect(mod.getAuthToken()).toBe("from-ls");
-    } finally {
-      if (prev === undefined) {
-        Reflect.deleteProperty(globalThis, "localStorage");
-      } else {
-        Object.defineProperty(globalThis, "localStorage", {
-          value: prev,
-          configurable: true,
-          writable: true,
-        });
-      }
+      rmSync(RUNTIME_DIR, { recursive: true, force: true });
+    } catch {
+      /* temp cleanup best-effort */
     }
   });
 
-  it("configureAuth before first request skips lazy default", async () => {
-    mod.setDefaultAuthProfile({ kind: "jwt" });
-    mod.configureAuth({ kind: "cookie" });
-    mock.onGet("/c").reply(200, {});
-    await mod.client.get("/c");
-    expect(mod.client.defaults.withCredentials).toBe(true);
+  beforeEach(() => {
+    mock.reset();
+    mod.clearAuthToken();
+    mod.setAuthRefreshHandler(null);
   });
 
-  it("lazy jwt merge keeps in-memory token when localStorage has no access token", async () => {
+  it("persists access and refresh to localStorage", () => {
     const store: Record<string, string> = {};
     const prev = globalThis.localStorage;
     Object.defineProperty(globalThis, "localStorage", {
@@ -340,7 +276,79 @@ describe("generated client (auth refresh)", () => {
     });
 
     try {
-      mod.setDefaultAuthProfile({ kind: "jwt" });
+      mod.setAuthToken({ accessToken: "acc", refreshToken: "ref" });
+      expect(store.a).toBe("acc");
+      expect(store.r).toBe("ref");
+      mod.clearAuthToken();
+      expect(store.a).toBeUndefined();
+      expect(store.r).toBeUndefined();
+    } finally {
+      if (prev === undefined) {
+        Reflect.deleteProperty(globalThis, "localStorage");
+      } else {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: prev,
+          configurable: true,
+          writable: true,
+        });
+      }
+    }
+  });
+
+  it("lazy hydrates from localStorage on first request", async () => {
+    const store: Record<string, string> = {
+      a: "from-ls",
+      r: "rt",
+    };
+    const prev = globalThis.localStorage;
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        getItem: (k: string) => (k in store ? store[k] : null),
+        setItem: (k: string, v: string) => {
+          store[k] = v;
+        },
+        removeItem: (k: string) => {
+          delete store[k];
+        },
+      },
+      configurable: true,
+    });
+
+    try {
+      mock.onGet("/hdr").reply(200, { ok: true });
+      await mod.client.get("/hdr");
+      expect(mod.getAuthToken()).toBe("from-ls");
+      expect(mod.getRefreshToken()).toBe("rt");
+    } finally {
+      if (prev === undefined) {
+        Reflect.deleteProperty(globalThis, "localStorage");
+      } else {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: prev,
+          configurable: true,
+          writable: true,
+        });
+      }
+    }
+  });
+
+  it("lazy merge keeps in-memory token when localStorage has no access token", async () => {
+    const store: Record<string, string> = {};
+    const prev = globalThis.localStorage;
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        getItem: (k: string) => (k in store ? store[k] : null),
+        setItem: (k: string, v: string) => {
+          store[k] = v;
+        },
+        removeItem: (k: string) => {
+          delete store[k];
+        },
+      },
+      configurable: true,
+    });
+
+    try {
       mod.setAuthToken("early");
       mock.onGet("/z").reply(200, {});
       await mod.client.get("/z");
