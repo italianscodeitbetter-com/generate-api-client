@@ -143,6 +143,8 @@ Choose **`--auth`** when you generate so `client.ts` only contains that flow. Th
 
 **Exports (typical):** `client`, `setAuthToken` (string or `{ accessToken, refreshToken? }`), `setRefreshToken`, `getAuthToken`, `getRefreshToken`, `clearAuthToken`, `setAuthRefreshHandler`, blob helpers.
 
+Successful calls on **`client`** resolve to a full **`AxiosResponse`** (use **`.data`** for the parsed body, **`.headers`** / **`.status`** for debugging).
+
 - **`setAuthRefreshHandler`** — on 401/403, runs your refresh, then **`saveToken`** like `setAuthToken`. Mark the refresh HTTP call with **`skipAuthRefresh: true`** (see `client.ts` JSDoc).
 - **`--auth jwt`** + lazy: first request loads tokens from `localStorage` if memory is still empty (then keeps using memory). Eager loads storage when the module loads.
 - **`--auth custom`:** edit **`applyRequestAuth`** inside `client.ts` for API keys, etc.
@@ -155,13 +157,13 @@ import { apiClient, client, setAuthToken, setAuthRefreshHandler, getRefreshToken
 setAuthRefreshHandler(async (saveToken) => {
   const refreshToken = getRefreshToken();
   if (!refreshToken) throw new Error("Not logged in");
-  const body = await client.post<{
+  const res = await client.post<{
     accessToken: string;
     refreshToken: string;
   }>("/auth/refresh", { refreshToken }, { skipAuthRefresh: true });
   saveToken({
-    accessToken: body.accessToken,
-    refreshToken: body.refreshToken,
+    accessToken: res.data.accessToken,
+    refreshToken: res.data.refreshToken,
   });
 });
 

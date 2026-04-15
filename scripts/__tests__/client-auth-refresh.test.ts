@@ -73,10 +73,11 @@ describe("generated client (auth refresh, bearer memory)", () => {
     mod.setAuthRefreshHandler(null);
   });
 
-  it("returns JSON body on 200 (response unwrap)", async () => {
+  it("returns full AxiosResponse on 200", async () => {
     mock.onGet("/ok").reply(200, { hello: "world" });
-    const data = await mod.client.get("/ok");
-    expect(data).toEqual({ hello: "world" });
+    const res = await mod.client.get("/ok");
+    expect(res.status).toBe(200);
+    expect(res.data).toEqual({ hello: "world" });
   });
 
   it("401 without refresh handler clears token and rejects", async () => {
@@ -108,8 +109,8 @@ describe("generated client (auth refresh, bearer memory)", () => {
       ok: true,
     });
 
-    const data = await mod.client.get("/resource");
-    expect(data).toEqual({ ok: true });
+    const res = await mod.client.get("/resource");
+    expect(res.data).toEqual({ ok: true });
     expect(refreshRuns).toBe(1);
     expect(mod.getAuthToken()).toBe("fresh");
   });
@@ -123,8 +124,8 @@ describe("generated client (auth refresh, bearer memory)", () => {
     });
     mock.onGet("/r").replyOnce(403).onGet("/r").reply(200, { fixed: 1 });
 
-    const data = await mod.client.get("/r");
-    expect(data).toEqual({ fixed: 1 });
+    const res = await mod.client.get("/r");
+    expect(res.data).toEqual({ fixed: 1 });
     expect(refreshRuns).toBe(1);
     expect(mod.getAuthToken()).toBe("after-403");
   });
@@ -217,8 +218,8 @@ describe("generated client (auth refresh, bearer memory)", () => {
       mod.client.get("/a"),
       mod.client.get("/b"),
     ]);
-    expect(a).toEqual({ which: "a" });
-    expect(b).toEqual({ which: "b" });
+    expect(a.data).toEqual({ which: "a" });
+    expect(b.data).toEqual({ which: "b" });
     expect(refreshRuns).toBe(1);
   });
 });

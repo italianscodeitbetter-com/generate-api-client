@@ -49,13 +49,7 @@ const AUTH_RETRY_MAX = 3;
 function sharedTail(): string {
   return `
 client.interceptors.response.use(
-  (response) => {
-    const responseType = response.config.responseType;
-    if (responseType === "blob" || responseType === "arraybuffer") {
-      return response;
-    }
-    return response.data;
-  },
+  (response) => response,
   async (error: unknown) => {
     if (!axios.isAxiosError(error) || !error.config) {
       return Promise.reject(error);
@@ -108,9 +102,8 @@ client.interceptors.response.use(
 );
 
 /**
- * Normalizes blob requests when an older client interceptor still returns only
- * \`response.data\` (Blob). Current template returns the full AxiosResponse for
- * blob/arraybuffer so headers stay available.
+ * Normalizes values that may be a bare \`Blob\` or a full \`AxiosResponse<Blob>\`
+ * (e.g. legacy callers or mixed code paths) so blob helpers always see headers.
  */
 export function ensureBlobAxiosResponse(
   value: Blob | AxiosResponse<Blob>,
@@ -468,7 +461,10 @@ _refreshToken = readStorage(JWT_REFRESH_KEY);
 `;
 }
 
-function requestInterceptor(mode: ClientAuthMode, jwtInit: "eager" | "lazy"): string {
+function requestInterceptor(
+  mode: ClientAuthMode,
+  jwtInit: "eager" | "lazy",
+): string {
   if (mode === "none") {
     return `
 client.interceptors.request.use((config) => {

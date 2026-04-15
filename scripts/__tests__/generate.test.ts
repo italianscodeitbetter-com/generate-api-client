@@ -282,6 +282,7 @@ describe("generate manifest", () => {
     expect(uploadContext).toContain("new FormData()");
     expect(uploadContext).toContain("_formData.append(");
     expect(uploadContext).toContain(", _formData,");
+    expect(uploadContext).toMatch(/\.postForm</);
     expect(uploadContext).not.toMatch(/\.post<[^>]+>\([^,]+,\s*data,/);
     expect(uploadContext).toMatch(
       /async uploadCsv\(args:\s*\{\s*query:\s*\{[^}]+\};\s*data:\s*CsvUploadBody\s*\}/s,
@@ -290,7 +291,7 @@ describe("generate manifest", () => {
     expect(uploadContext).not.toContain("params?: unknown");
   });
 
-  it("leaves full Axios response for blob endpoints so res.data and headers work", async () => {
+  it("response interceptor returns full AxiosResponse; blob contexts still use responseType blob", async () => {
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
     execSync(
@@ -302,8 +303,7 @@ describe("generate manifest", () => {
       join(tempDir, "api-blob", "client.ts"),
       "utf-8",
     );
-    expect(clientSource).toContain('responseType === "blob"');
-    expect(clientSource).toContain('responseType === "arraybuffer"');
+    expect(clientSource).toMatch(/\(\s*response\s*\)\s*=>\s*response/);
     expect(clientSource).toContain("setAuthRefreshHandler");
     expect(clientSource).toContain("AUTH_RETRY_MAX");
 

@@ -1117,6 +1117,20 @@ function emitMultipartFormDataBuild(
   return lines;
 }
 
+/** Use axios *Form aliases when the body is multipart/form-data (FormData). */
+function axiosMultipartMethod(httpMethod: string): string {
+  switch (httpMethod) {
+    case "post":
+      return "postForm";
+    case "put":
+      return "putForm";
+    case "patch":
+      return "patchForm";
+    default:
+      return httpMethod;
+  }
+}
+
 function generateContextFile(
   tag: string,
   operations: Operation[],
@@ -1330,6 +1344,10 @@ function generateContextFile(
         ? "data"
         : "undefined";
 
+    const mutatingHttpMethod = op.isMultipart
+      ? axiosMultipartMethod(op.method)
+      : op.method;
+
     if (op.producesBlob) {
       if (isReadMethod) {
         methodLines.push(
@@ -1337,7 +1355,7 @@ function generateContextFile(
         );
       } else {
         methodLines.push(
-          `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${mutatingBodyVal}, ${blobConfig});`,
+          `      const _raw = await ${http}.${mutatingHttpMethod}<Blob>(${pathExpr}, ${mutatingBodyVal}, ${blobConfig});`,
         );
       }
       methodLines.push(`      const res = ensureBlobAxiosResponse(_raw);`);
@@ -1357,11 +1375,11 @@ function generateContextFile(
       }
     } else if (hasQuery) {
       methodLines.push(
-        `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, ${mutatingBodyVal}, { params: query });`,
+        `      return ${http}.${mutatingHttpMethod}<${op.responseType}>(${pathExpr}, ${mutatingBodyVal}, { params: query });`,
       );
     } else {
       methodLines.push(
-        `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, ${mutatingBodyVal});`,
+        `      return ${http}.${mutatingHttpMethod}<${op.responseType}>(${pathExpr}, ${mutatingBodyVal});`,
       );
     }
 
