@@ -1,0 +1,26 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Dangling response $ref", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.example.com" }],
+  "paths": {
+    "/admin/health": {
+      "get": {
+        "operationId": "admin_getHealth",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        },
+        "tags": ["admin"]
+      }
+    }
+  },
+  "components": {
+    "schemas": {}
+  }
+}

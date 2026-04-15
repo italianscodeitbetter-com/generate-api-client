@@ -493,6 +493,14 @@ function isNullableSchema(schema: SchemaObject): boolean {
   );
 }
 
+/** Target name for `#/definitions/X` or `#/components/schemas/X`. */
+function referencedSchemaKey(ref: string): string | undefined {
+  const m =
+    ref.match(/#\/definitions\/(.+)$/) ??
+    ref.match(/#\/components\/schemas\/(.+)$/);
+  return m?.[1];
+}
+
 /** JSON Schema / OpenAPI `enum` → TypeScript union of literals */
 function enumToLiteralUnion(values: unknown[]): string {
   return values
@@ -590,17 +598,17 @@ function schemaToTsType(
   if (!schema) return "unknown";
 
   const ref = schema.$ref;
-  if (ref) {
-    const match =
-      ref.match(/#\/definitions\/(.+)$/) ??
-      ref.match(/#\/components\/schemas\/(.+)$/);
-    const name = match?.[1];
-    if (name && !refsSeen.has(name)) {
+  if (typeof ref === "string") {
+    const name = referencedSchemaKey(ref);
+    if (!name || !(name in definitions)) {
+      return "unknown";
+    }
+    if (!refsSeen.has(name)) {
       refsSeen.add(name);
       const inner = name;
       return isNullableSchema(schema) ? `${inner} | null` : inner;
     }
-    const inner = name ?? "unknown";
+    const inner = name;
     return isNullableSchema(schema) ? `${inner} | null` : inner;
   }
 
@@ -789,6 +797,8 @@ interface Operation {
     schema: SchemaObject;
     propertyDescriptions?: Record<string, string>;
   } | null;
+  /** From OpenAPI requestBody.required (OAS 3) or body parameter required (OAS 2). */
+  bodyRequired: boolean;
   /** OpenAPI 3 multipart/form-data body (when JSON is not chosen for the same operation). */
   isMultipart: boolean;
   /** When set, method builds FormData from typed `data` using these keys. */
@@ -847,6 +857,7 @@ function extractOperations(
         schema: SchemaObject;
         propertyDescriptions?: Record<string, string>;
       } | null = null;
+      let bodyRequired = false;
 
       const pathParamNames = [...(path.match(/\{([^}]+)\}/g) ?? [])].map((m) =>
         m.slice(1, -1),
@@ -900,6 +911,7 @@ function extractOperations(
               if (desc) propertyDescriptions[propName] = desc;
             }
           }
+          bodyRequired = p.required === true;
           bodyParam = {
             name: p.name,
             schema: bodySchema,
@@ -937,6 +949,8 @@ function extractOperations(
               if (desc) propertyDescriptions[propName] = desc;
             }
           }
+          bodyRequired =
+            (resolvedBody as { required?: boolean }).required === true;
           bodyParam = {
             name: "data",
             schema: bodySchema,
@@ -976,6 +990,7 @@ function extractOperations(
         pathParams,
         queryParams,
         bodyParam,
+        bodyRequired,
         isMultipart,
         multipartFormFields,
         responseType: producesBlob ? "Blob" : responseType,
@@ -1163,51 +1178,65 @@ function generateContextFile(
     }
     seenNames.add(methodName);
 
-    const pathParamsType =
-      op.pathParams.length > 0
-        ? `{ ${op.pathParams.map((p) => `${p.name}: string | number`).join("; ")} }`
-        : null;
-    const queryParamsType =
-      op.queryParams.length > 0
-        ? `{ ${op.queryParams.map((q) => `${q.name}${q.required ? "" : "?"}: ${schemaToTsType(q.schema, definitions)}`).join("; ")} }`
-        : null;
-
-    const paramsParts: string[] = [];
-    if (pathParamsType) paramsParts.push(pathParamsType);
-    if (queryParamsType) paramsParts.push(queryParamsType);
-
-    const paramsType =
-      paramsParts.length > 0 ? paramsParts.join(" & ") : "void";
-    const hasParams = op.pathParams.length > 0 || op.queryParams.length > 0;
-    const paramsRequired =
-      op.pathParams.length > 0 ||
-      op.queryParams.some((q) => q.required);
-    const paramsArg = hasParams
-      ? `params${paramsRequired ? "" : "?"}: ${paramsType}`
-      : "";
-
-    const needsBody = op.method !== "get" && op.method !== "delete";
+    const includeDataInArgs =
+      Boolean(op.bodyParam) ||
+      (op.method !== "get" && op.method !== "delete");
     const multipartAuto = Boolean(
       op.bodyParam && op.isMultipart && op.multipartFormFields?.length,
     );
-    const bodyArg = op.bodyParam
-      ? multipartAuto
-        ? `data: ${schemaToTsType(op.bodyParam.schema, definitions)}`
-        : op.isMultipart
-          ? `data: FormData`
-          : `data: ${schemaToTsType(op.bodyParam.schema, definitions)}`
-      : needsBody
-        ? `data?: FormData | Record<string, unknown>`
-        : "";
+
+    const argsObjectProps: string[] = [];
+    if (op.pathParams.length > 0) {
+      argsObjectProps.push(
+        `params: { ${op.pathParams.map((p) => `${p.name}: string | number`).join("; ")} }`,
+      );
+    }
+    if (op.queryParams.length > 0) {
+      const queryInner = op.queryParams
+        .map(
+          (q) =>
+            `${q.name}${q.required ? "" : "?"}: ${schemaToTsType(q.schema, definitions)}`,
+        )
+        .join("; ");
+      const queryKey = op.queryParams.some((q) => q.required)
+        ? "query"
+        : "query?";
+      argsObjectProps.push(`${queryKey}: { ${queryInner} }`);
+    }
+    if (includeDataInArgs) {
+      let dataProp: string;
+      if (op.bodyParam) {
+        const bodyTs = multipartAuto
+          ? schemaToTsType(op.bodyParam.schema, definitions)
+          : op.isMultipart
+            ? "FormData"
+            : schemaToTsType(op.bodyParam.schema, definitions);
+        dataProp = op.bodyRequired
+          ? `data: ${bodyTs}`
+          : `data?: ${bodyTs} | null`;
+      } else {
+        dataProp = `data?: FormData | Record<string, unknown> | null`;
+      }
+      argsObjectProps.push(dataProp);
+    }
+
+    const hasArgsObject = argsObjectProps.length > 0;
+    const argsObjectRequired =
+      op.pathParams.length > 0 ||
+      op.queryParams.some((q) => q.required) ||
+      (Boolean(op.bodyParam) && op.bodyRequired);
+
     const optionsArg = op.producesBlob ? `options?: BlobDownloadOptions` : "";
-    const hasBodyInSignature = Boolean(bodyArg);
-    const args =
-      hasParams && hasBodyInSignature
-        ? [bodyArg, paramsArg, optionsArg].filter(Boolean).join(", ")
-        : [paramsArg, bodyArg, optionsArg].filter(Boolean).join(", ");
+    const methodParams = [
+      hasArgsObject
+        ? `${argsObjectRequired ? "args" : "args?"}: { ${argsObjectProps.join("; ")} }`
+        : "",
+      optionsArg,
+    ]
+      .filter(Boolean)
+      .join(", ");
 
     let pathExpr = `"${op.path}"`;
-    const pathParamNames = op.pathParams.map((p) => p.name);
     if (op.pathParams.length > 0) {
       const repl = op.path.replace(
         /\{([^}]+)\}/g,
@@ -1215,6 +1244,9 @@ function generateContextFile(
       );
       pathExpr = "`" + repl + "`";
     }
+
+    const hasQuery = op.queryParams.length > 0;
+    const isReadMethod = op.method === "get" || op.method === "delete";
 
     const jsdocParts: string[] = [];
     const summary = op.summary ?? op.description;
@@ -1224,38 +1256,32 @@ function generateContextFile(
         jsdocParts.push(jsdocEscape(op.description));
       }
     }
-    const pathJsdocLines: string[] = [];
     for (const p of op.pathParams) {
       const desc = p.description
         ? jsdocEscape(p.description)
         : "Path parameter";
-      pathJsdocLines.push(`@param params.${p.name} - ${desc}`);
+      jsdocParts.push(`@param args.params.${p.name} - ${desc}`);
     }
-    const queryJsdocLines: string[] = [];
     for (const q of op.queryParams) {
       if (q.description) {
-        queryJsdocLines.push(
-          `@param params.${q.name} - ${jsdocEscape(q.description)}`,
+        jsdocParts.push(
+          `@param args.query.${q.name} - ${jsdocEscape(q.description)}`,
         );
       } else {
-        queryJsdocLines.push(`@param params.${q.name} - Query parameter`);
+        jsdocParts.push(`@param args.query.${q.name} - Query parameter`);
       }
     }
-    let bodyJsdocLine: string | undefined;
     if (op.bodyParam) {
       const bodyDesc = op.bodyParam.propertyDescriptions
         ? Object.entries(op.bodyParam.propertyDescriptions)
             .map(([k, v]) => `${k}: ${jsdocEscape(v)}`)
             .join("; ")
         : "Request body";
-      bodyJsdocLine = `@param data - ${jsdocEscape(bodyDesc)}`;
-    }
-    if (hasParams && hasBodyInSignature) {
-      if (bodyJsdocLine) jsdocParts.push(bodyJsdocLine);
-      jsdocParts.push(...pathJsdocLines, ...queryJsdocLines);
-    } else {
-      jsdocParts.push(...pathJsdocLines, ...queryJsdocLines);
-      if (bodyJsdocLine) jsdocParts.push(bodyJsdocLine);
+      jsdocParts.push(`@param args.data - ${jsdocEscape(bodyDesc)}`);
+    } else if (includeDataInArgs) {
+      jsdocParts.push(
+        `@param args.data - Request body (optional when the operation has no schema; may be null)`,
+      );
     }
     if (op.producesBlob) {
       jsdocParts.push(
@@ -1274,7 +1300,18 @@ function generateContextFile(
       }
       methodLines.push(`     */`);
     }
-    methodLines.push(`    async ${methodName}(${args}) {`);
+    methodLines.push(`    async ${methodName}(${methodParams}) {`);
+
+    if (hasArgsObject) {
+      const destructureKeys: string[] = [];
+      if (op.pathParams.length > 0) destructureKeys.push("params");
+      if (op.queryParams.length > 0) destructureKeys.push("query");
+      if (includeDataInArgs) destructureKeys.push("data");
+      const rhs = argsObjectRequired ? "args" : "args ?? {}";
+      methodLines.push(
+        `      const { ${destructureKeys.join(", ")} } = ${rhs};`,
+      );
+    }
 
     if (multipartAuto) {
       methodLines.push(
@@ -1283,108 +1320,49 @@ function generateContextFile(
     }
 
     const http = clientVar;
-    const bodySegment =
-      multipartAuto
-        ? ", _formData"
-        : op.bodyParam || needsBody
-          ? ", data"
-          : "";
+    const blobConfig = hasQuery
+      ? `{ responseType: "blob", params: query }`
+      : `{ responseType: "blob" }`;
+
+    const mutatingBodyVal = multipartAuto
+      ? "_formData"
+      : includeDataInArgs
+        ? "data"
+        : "undefined";
+
     if (op.producesBlob) {
-      if (op.method === "get" || op.method === "delete") {
-        if (op.pathParams.length > 0 && op.queryParams.length > 0) {
-          methodLines.push(
-            `      const { ${pathParamNames.join(", ")}, ...query } = params ?? {};`,
-          );
-          methodLines.push(
-            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params: query });`,
-          );
-        } else if (op.pathParams.length > 0) {
-          methodLines.push(
-            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`,
-          );
-        } else if (op.queryParams.length > 0) {
-          methodLines.push(
-            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob", params });`,
-          );
-        } else {
-          methodLines.push(
-            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, { responseType: "blob" });`,
-          );
-        }
+      if (isReadMethod) {
+        methodLines.push(
+          `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${blobConfig});`,
+        );
       } else {
-        const bodyVal = multipartAuto
-          ? "_formData"
-          : op.bodyParam || needsBody
-            ? "data"
-            : "undefined";
-        if (op.pathParams.length > 0 && op.queryParams.length > 0) {
-          methodLines.push(
-            `      const { ${pathParamNames.join(", ")}, ...query } = params ?? {};`,
-          );
-          methodLines.push(
-            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob", params: query });`,
-          );
-        } else if (op.pathParams.length > 0) {
-          methodLines.push(
-            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`,
-          );
-        } else if (op.queryParams.length > 0) {
-          methodLines.push(
-            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob", params });`,
-          );
-        } else {
-          methodLines.push(
-            `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${bodyVal}, { responseType: "blob" });`,
-          );
-        }
+        methodLines.push(
+          `      const _raw = await ${http}.${op.method}<Blob>(${pathExpr}, ${mutatingBodyVal}, ${blobConfig});`,
+        );
       }
       methodLines.push(`      const res = ensureBlobAxiosResponse(_raw);`);
       methodLines.push(
         `      if (options?.download) triggerBlobDownload(res.data, res.headers as BlobDownloadHeaders, options.filename);`,
       );
       methodLines.push(`      return res;`);
-    } else if (op.method === "get" || op.method === "delete") {
-      if (op.pathParams.length > 0 && op.queryParams.length > 0) {
-        methodLines.push(
-          `      const { ${pathParamNames.join(", ")}, ...query } = params;`,
-        );
+    } else if (isReadMethod) {
+      if (hasQuery) {
         methodLines.push(
           `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, { params: query });`,
         );
-      } else if (op.pathParams.length > 0) {
-        methodLines.push(
-          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr});`,
-        );
-      } else if (op.queryParams.length > 0) {
-        methodLines.push(
-          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, { params });`,
-        );
       } else {
         methodLines.push(
           `      return ${http}.${op.method}<${op.responseType}>(${pathExpr});`,
         );
       }
+    } else if (hasQuery) {
+      methodLines.push(
+        `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, ${mutatingBodyVal}, { params: query });`,
+      );
     } else {
-      if (op.pathParams.length > 0 && op.queryParams.length > 0) {
-        methodLines.push(
-          `      const { ${pathParamNames.join(", ")}, ...query } = params;`,
-        );
-        methodLines.push(
-          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodySegment}, { params: query });`,
-        );
-      } else if (op.pathParams.length > 0) {
-        methodLines.push(
-          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodySegment});`,
-        );
-      } else if (op.queryParams.length > 0) {
-        methodLines.push(
-          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodySegment}, { params });`,
-        );
-      } else {
-        methodLines.push(
-          `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}${bodySegment});`,
-        );
-      }
+      methodLines.push(
+        `      return ${http}.${op.method}<${op.responseType}>(${pathExpr}, ${mutatingBodyVal});`,
+      );
     }
 
     methodLines.push(`    }`);

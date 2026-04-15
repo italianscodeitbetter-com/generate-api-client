@@ -1,0 +1,126 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Args shapes test API", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.example.com" }],
+  "paths": {
+    "/shapes": {
+      "get": {
+        "operationId": "shapes_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Shape" }
+                }
+              }
+            }
+          }
+        },
+        "tags": ["shapes"]
+      },
+      "post": {
+        "operationId": "shapes_create",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateShape" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Shape" }
+              }
+            }
+          }
+        },
+        "tags": ["shapes"]
+      }
+    },
+    "/shapes/{id}": {
+      "get": {
+        "operationId": "shapes_get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Shape" }
+              }
+            }
+          }
+        },
+        "tags": ["shapes"]
+      },
+      "put": {
+        "operationId": "shapes_update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateShape" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Shape" }
+              }
+            }
+          }
+        },
+        "tags": ["shapes"]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Shape": {
+        "type": "object",
+        "properties": { "id": { "type": "string" } }
+      },
+      "CreateShape": {
+        "type": "object",
+        "properties": { "name": { "type": "string" } }
+      },
+      "UpdateShape": {
+        "type": "object",
+        "properties": { "name": { "type": "string" } }
+      }
+    }
+  }
+}

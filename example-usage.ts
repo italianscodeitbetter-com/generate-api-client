@@ -16,13 +16,15 @@ async function main() {
   }
 
   try {
-    const listRes = await apiClient.allegati.list({ page: 1, size: 10 });
+    const listRes = await apiClient.allegati.list({
+      query: { page: 1, size: 10 },
+    });
     console.log("Allegati count:", listRes.data.count);
     console.log("First result:", listRes.data.results[0]);
 
     if (listRes.data.results[0]?.id) {
       const detailRes = await apiClient.allegati.read({
-        id: listRes.data.results[0].id,
+        params: { id: listRes.data.results[0].id },
       });
       console.log("Detail:", detailRes.data);
     }

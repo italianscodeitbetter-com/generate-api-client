@@ -53,6 +53,20 @@ const multipartUploadFixturePath = join(
   "fixtures",
   "multipart-upload-openapi.json",
 );
+const openapi3ArgsShapesFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "openapi3-args-shapes.json",
+);
+const openapi3DanglingResponseRefFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "openapi3-dangling-response-ref.json",
+);
 
 describe("generate manifest", () => {
   let tempDir: string;
@@ -156,7 +170,62 @@ describe("generate manifest", () => {
       "utf-8",
     );
     expect(itemContext).toContain("UpdateItem");
-    expect(itemContext).toContain("data: UpdateItem");
+    expect(itemContext).toMatch(/args.*data:\s*UpdateItem/s);
+    expect(itemContext).not.toContain("params?: unknown");
+    expect(itemContext).toContain("const { params, data } = args;");
+  });
+
+  it("does not widen args destructure with unknown", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi3ContentFixturePath}" --out api-no-unknown-destructure`,
+      { cwd: tempDir },
+    );
+
+    const authContext = readFileSync(
+      join(tempDir, "api-no-unknown-destructure", "contexts", "auth.ts"),
+      "utf-8",
+    );
+    expect(authContext).toContain("const { data } = args;");
+    expect(authContext).not.toContain("params?: unknown");
+    expect(authContext).not.toContain("query?: unknown");
+    expect(authContext).not.toContain("data?: unknown");
+  });
+
+  it("destructures only keys present on each operation args type", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi3ArgsShapesFixturePath}" --out api-args-shapes`,
+      { cwd: tempDir },
+    );
+
+    const shapesContext = readFileSync(
+      join(tempDir, "api-args-shapes", "contexts", "shapes.ts"),
+      "utf-8",
+    );
+    expect(shapesContext).toContain("const { query } = args ?? {};");
+    expect(shapesContext).toContain("const { data } = args;");
+    expect(shapesContext).toContain("const { params } = args;");
+    expect(shapesContext).toContain("const { params, data } = args;");
+    expect(shapesContext).not.toContain("params?: unknown");
+  });
+
+  it("uses unknown when response $ref has no matching components/schemas entry", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi3DanglingResponseRefFixturePath}" --out api-dangling-ref`,
+      { cwd: tempDir },
+    );
+
+    const adminContext = readFileSync(
+      join(tempDir, "api-dangling-ref", "contexts", "admin.ts"),
+      "utf-8",
+    );
+    expect(adminContext).toContain("client.get<unknown>");
+    expect(adminContext).not.toContain("HealthResponse");
   });
 
   it("extracts body and response from OpenAPI 2.0 (parameters in:body, responses.schema)", async () => {
@@ -172,7 +241,7 @@ describe("generate manifest", () => {
       "utf-8",
     );
     expect(itemContext).toContain("UpdateItem");
-    expect(itemContext).toContain("data: UpdateItem");
+    expect(itemContext).toMatch(/args.*data:\s*UpdateItem/s);
     expect(itemContext).toContain("client.put<Item>");
   });
 
@@ -189,7 +258,7 @@ describe("generate manifest", () => {
       "utf-8",
     );
     expect(thingsContext).toContain("page:");
-    expect(thingsContext).toMatch(/params[^)]*page/);
+    expect(thingsContext).toMatch(/query[^}]*page/s);
   });
 
   it("multipart/form-data builds FormData and types binary fields as Blob | File", async () => {
@@ -215,8 +284,10 @@ describe("generate manifest", () => {
     expect(uploadContext).toContain(", _formData,");
     expect(uploadContext).not.toMatch(/\.post<[^>]+>\([^,]+,\s*data,/);
     expect(uploadContext).toMatch(
-      /async uploadCsv\(data:[^)]+\bparams\b/s,
+      /async uploadCsv\(args:\s*\{\s*query:\s*\{[^}]+\};\s*data:\s*CsvUploadBody\s*\}/s,
     );
+    expect(uploadContext).toContain("const { query, data } = args;");
+    expect(uploadContext).not.toContain("params?: unknown");
   });
 
   it("leaves full Axios response for blob endpoints so res.data and headers work", async () => {
