@@ -68,8 +68,10 @@ interface ParameterObject {
   in: string;
   required?: boolean;
   type?: string;
+  format?: string;
   description?: string;
   schema?: SchemaObject;
+  items?: SchemaObject;
 }
 
 const DEFAULT_OUT = "api";
@@ -402,9 +404,26 @@ function getResponseSchema(response: unknown): SchemaObject | undefined {
 type MultipartFieldKind = "binary" | "arrayBinary" | "primitive";
 
 /**
+ * True when `application/json` has no real fields (common placeholder next to multipart).
+ * Without this, we would pick JSON and ignore a richer multipart schema.
+ */
+function isEffectivelyEmptyJsonSchema(schema: SchemaObject | undefined): boolean {
+  if (!schema) return true;
+  if (schema.$ref) return false;
+  if (Array.isArray(schema.allOf) && schema.allOf.length > 0) return false;
+  if (schema.enum && schema.enum.length > 0) return false;
+  if (schema.type === "object" || schema.properties) {
+    const props = schema.properties;
+    return !props || Object.keys(props).length === 0;
+  }
+  if (!schema.type && !schema.properties) return true;
+  return false;
+}
+
+/**
  * Pick request body schema from OpenAPI 3.0 requestBody.content.
- * Prefers application/json when present (same operation may list JSON + multipart).
- * OpenAPI 2.0 uses parameters with in: "body" (handled separately in extractOperations).
+ * When both application/json and multipart/form-data exist, prefer multipart if JSON is empty.
+ * OpenAPI 2.0 uses parameters with in: "body" or in: "formData" (handled in extractOperations).
  */
 function getRequestBodySelection(
   requestBody: unknown,
@@ -417,12 +436,20 @@ function getRequestBodySelection(
   if (!content || typeof content !== "object") return undefined;
 
   const jsonSchema = content["application/json"]?.schema;
+  const multipartSchema = content["multipart/form-data"]?.schema;
+
+  if (
+    multipartSchema &&
+    isEffectivelyEmptyJsonSchema(jsonSchema as SchemaObject | undefined)
+  ) {
+    return { schema: multipartSchema, isMultipart: true };
+  }
+
   if (jsonSchema) return { schema: jsonSchema, isMultipart: false };
 
   const starSchema = content["*/*"]?.schema;
   if (starSchema) return { schema: starSchema, isMultipart: false };
 
-  const multipartSchema = content["multipart/form-data"]?.schema;
   if (multipartSchema) return { schema: multipartSchema, isMultipart: true };
 
   const first = Object.entries(content).find(
@@ -441,6 +468,30 @@ function getRequestBodySelection(
 /**
  * Flat multipart body: only top-level object properties. Returns null if shape is unsupported.
  */
+/** OpenAPI 2 formData parameter → property schema (type file → binary). */
+function parameterSchemaForFormData(
+  doc: ParsedSpec,
+  p: ParameterObject,
+): SchemaObject {
+  if (p.schema) {
+    return derefOpenApiFragment(doc, p.schema) as SchemaObject;
+  }
+  const raw = p as { type?: string; format?: string; items?: SchemaObject };
+  if (raw.type === "file") {
+    return { type: "string", format: "binary" };
+  }
+  if (raw.type === "array") {
+    const items = raw.items
+      ? (derefOpenApiFragment(doc, raw.items) as SchemaObject)
+      : ({ type: "string" } as SchemaObject);
+    return { type: "array", items };
+  }
+  return {
+    type: (raw.type as string) ?? "string",
+    ...(raw.format ? { format: raw.format } : {}),
+  };
+}
+
 function computeMultipartFormFields(
   doc: ParsedSpec,
   schema: SchemaObject | undefined,
@@ -477,7 +528,10 @@ function computeMultipartFormFields(
       }
       return null;
     }
-    if (prop.type === "string" && prop.format === "binary") {
+    if (
+      (prop.type === "string" && prop.format === "binary") ||
+      prop.type === "file"
+    ) {
       fields.push({ key, required: required.has(key), kind: "binary" });
       continue;
     }
@@ -886,6 +940,8 @@ function extractOperations(
         }),
       );
 
+      const formDataParams: ParameterObject[] = [];
+
       for (const p of allParams) {
         if (p.in === "path") continue;
         if (p.in === "query") {
@@ -897,6 +953,8 @@ function extractOperations(
             }) as SchemaObject,
             description: p.description,
           });
+        } else if (p.in === "formData") {
+          formDataParams.push(p);
         } else if (p.in === "body") {
           const bodySchema = (p.schema ?? { type: "object" }) as SchemaObject;
           const propertyDescriptions: Record<string, string> = {};
@@ -925,6 +983,35 @@ function extractOperations(
 
       let isMultipart = false;
       let multipartFormFields: Operation["multipartFormFields"];
+
+      // OpenAPI 2.0: multipart fields as parameters with in: "formData"
+      if (!bodyParam && formDataParams.length > 0) {
+        const properties: Record<string, SchemaObject> = {};
+        const requiredNames: string[] = [];
+        const propertyDescriptions: Record<string, string> = {};
+        for (const fp of formDataParams) {
+          properties[fp.name] = parameterSchemaForFormData(doc, fp);
+          if (fp.required === true) requiredNames.push(fp.name);
+          if (fp.description) propertyDescriptions[fp.name] = fp.description;
+        }
+        const bodySchema: SchemaObject = {
+          type: "object",
+          properties,
+          ...(requiredNames.length > 0 ? { required: requiredNames } : {}),
+        };
+        bodyRequired = formDataParams.some((p) => p.required === true);
+        bodyParam = {
+          name: "data",
+          schema: bodySchema,
+          propertyDescriptions:
+            Object.keys(propertyDescriptions).length > 0
+              ? propertyDescriptions
+              : undefined,
+        };
+        isMultipart = true;
+        const plan = computeMultipartFormFields(doc, bodySchema);
+        if (plan && plan.length > 0) multipartFormFields = plan;
+      }
 
       // OpenAPI 3.0: body in requestBody (OAS 2.0 uses parameters in: "body" above)
       if (!bodyParam && op.requestBody) {
@@ -1049,20 +1136,26 @@ function operationIdToFunctionName(operationId: string): string {
   if (parts.length <= 1) return sanitizeIdentifier(operationId);
   const [context, ...rest] = parts;
   const contextSafe = sanitizeIdentifier(context);
-  const action = rest
+  const actionRaw = rest
     .map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1)))
     .join("");
+  const action = sanitizeIdentifier(actionRaw);
   return contextSafe + action.charAt(0).toUpperCase() + action.slice(1);
 }
 
-/** Extract method name from operationId (e.g. allegati_list -> list, allegati_partial_update -> partialUpdate) */
+/**
+ * Extract method name from operationId (e.g. allegati_list -> list, allegati_partial_update -> partialUpdate).
+ * Segments may contain hyphens (e.g. building-registry-models_read); those must become camelCase or the
+ * emitted name is not a valid JS identifier.
+ */
 function operationIdToMethodName(operationId: string): string {
   const parts = operationId.split("_");
   if (parts.length <= 1) return sanitizeIdentifier(operationId);
   const [, ...rest] = parts;
-  return rest
+  const raw = rest
     .map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1)))
     .join("");
+  return sanitizeIdentifier(raw);
 }
 
 function sanitizeIdentifier(name: string): string {

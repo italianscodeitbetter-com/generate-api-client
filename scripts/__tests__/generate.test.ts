@@ -53,6 +53,27 @@ const multipartUploadFixturePath = join(
   "fixtures",
   "multipart-upload-openapi.json",
 );
+const openapi3MultipartOverEmptyJsonFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "openapi3-multipart-over-empty-json.json",
+);
+const openapi2FormdataUploadFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "openapi2-formdata-upload.json",
+);
+const openapi3HyphenOperationIdSegmentsFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "openapi3-hyphen-operation-id-segments.json",
+);
 const openapi3ArgsShapesFixturePath = join(
   projectRoot,
   "scripts",
@@ -259,6 +280,61 @@ describe("generate manifest", () => {
     );
     expect(thingsContext).toContain("page:");
     expect(thingsContext).toMatch(/query[^}]*page/s);
+  });
+
+  it("prefers multipart/form-data when application/json schema is empty", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi3MultipartOverEmptyJsonFixturePath}" --out api-mj-empty-json`,
+      { cwd: tempDir },
+    );
+
+    const ctx = readFileSync(
+      join(tempDir, "api-mj-empty-json", "contexts", "building-media.ts"),
+      "utf-8",
+    );
+    expect(ctx).toContain("new FormData()");
+    expect(ctx).toMatch(/\.postForm</);
+    expect(ctx).toContain("building_id");
+    expect(ctx).toContain("uploadToBuilding");
+    expect(ctx).toMatch(/data\??:\s*\{[^}]*file:\s*Blob\s*\|\s*File/s);
+  });
+
+  it("sanitizes operationId segments with hyphens to valid method names", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi3HyphenOperationIdSegmentsFixturePath}" --out api-hyphen-opid`,
+      { cwd: tempDir },
+    );
+
+    const ctx = readFileSync(
+      join(tempDir, "api-hyphen-opid", "contexts", "contract.ts"),
+      "utf-8",
+    );
+    expect(ctx).toContain("async buildingRegistryModelsRead(");
+    expect(ctx).toContain("async buildingRegistryModelsUpdate(");
+    expect(ctx).not.toMatch(/async building-/);
+    expect(ctx).toContain("client.put<Array<");
+  });
+
+  it("OpenAPI 2.0 formData parameters produce multipart client method", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi2FormdataUploadFixturePath}" --out api-oas2-formdata`,
+      { cwd: tempDir },
+    );
+
+    const ctx = readFileSync(
+      join(tempDir, "api-oas2-formdata", "contexts", "building-media.ts"),
+      "utf-8",
+    );
+    expect(ctx).toContain("new FormData()");
+    expect(ctx).toMatch(/\.postForm</);
+    expect(ctx).toContain("building_id");
+    expect(ctx).toContain("uploadToBuilding");
   });
 
   it("multipart/form-data builds FormData and types binary fields as Blob | File", async () => {

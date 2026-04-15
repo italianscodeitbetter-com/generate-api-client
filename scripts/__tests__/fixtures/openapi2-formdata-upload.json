@@ -1,0 +1,50 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "OAS2 formData upload", "version": "1.0.0" },
+  "host": "api.example.com",
+  "basePath": "/api",
+  "schemes": ["https"],
+  "consumes": ["application/json"],
+  "produces": ["application/json"],
+  "paths": {
+    "/building-media/upload-to-building/": {
+      "post": {
+        "operationId": "BuildingMediaViewSet_upload_to_building",
+        "tags": ["building-media"],
+        "consumes": ["multipart/form-data"],
+        "parameters": [
+          {
+            "name": "file",
+            "in": "formData",
+            "type": "file",
+            "required": true,
+            "description": "File to upload"
+          },
+          {
+            "name": "building_id",
+            "in": "formData",
+            "type": "string",
+            "format": "uuid",
+            "required": true
+          },
+          {
+            "name": "type",
+            "in": "formData",
+            "type": "string",
+            "required": true
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "schema": {
+              "type": "object",
+              "properties": { "id": { "type": "string" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {}
+}

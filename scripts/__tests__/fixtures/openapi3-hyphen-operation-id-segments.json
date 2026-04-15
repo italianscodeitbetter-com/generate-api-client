@@ -1,0 +1,98 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Hyphen segments in operationId", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.example.com" }],
+  "paths": {
+    "/contract/{id}/building-registry-models/": {
+      "get": {
+        "operationId": "contract_building-registry-models_read",
+        "tags": ["contract"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "building": { "type": "string", "format": "uuid" },
+                      "registry_models": {
+                        "type": "array",
+                        "items": { "type": "string", "format": "uuid" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "contract_building-registry-models_update",
+        "tags": ["contract"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "building": { "type": "string", "format": "uuid" },
+                    "registry_models": {
+                      "type": "array",
+                      "items": { "type": "string", "format": "uuid" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "building": { "type": "string", "format": "uuid" },
+                      "registry_models": {
+                        "type": "array",
+                        "items": { "type": "string", "format": "uuid" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": { "schemas": {} }
+}

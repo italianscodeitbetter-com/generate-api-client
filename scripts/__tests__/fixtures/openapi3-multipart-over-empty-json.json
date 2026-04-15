@@ -1,0 +1,48 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Multipart vs empty JSON", "version": "1.0.0" },
+  "servers": [{ "url": "https://api.example.com" }],
+  "paths": {
+    "/building-media/upload-to-building/": {
+      "post": {
+        "operationId": "BuildingMediaViewSet_upload_to_building",
+        "tags": ["building-media"],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "properties": {} }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Upload file"
+                  },
+                  "building_id": { "type": "string", "format": "uuid" },
+                  "type": { "type": "string" }
+                },
+                "required": ["file", "building_id", "type"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "id": { "type": "string" } } }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {}
+  }
+}
