@@ -112,7 +112,8 @@ The generator creates an `api/` folder and a local manifest (`api-client.manifes
 api/
 ├── client.ts              # Axios instance + single auth mode + optional token refresh
 ├── apiClient.ts           # Nested apiClient (generated; imports apiClient.custom.ts)
-├── apiClient.custom.ts    # augmentApiClient hook — created if missing, never overwritten
+├── apiClient.custom.ts    # Re-exports augment — regenerated on every generate
+├── apiClient.augment.ts   # Implement augmentApiClient here — created once, never overwritten
 ├── types/index.ts         # TypeScript interfaces from schema definitions
 ├── contexts/              # One file per API context (tag)
 │   ├── allegati.ts
@@ -139,18 +140,20 @@ When you run your build, it:
 
 **If manifest is missing:** Run `npm run generate` first (e.g. after a fresh clone).
 
-### Extending `apiClient` (`apiClient.custom.ts`)
+### Extending `apiClient` (`apiClient.augment.ts`)
 
-The generator writes **`apiClient.ts`** as a thin wrapper: it builds **`_generatedApiClient`**, exports the type **`GeneratedApiClient`**, and assigns **`apiClient = augmentApiClient(_generatedApiClient)`** from **`./apiClient.custom.ts`**.
+The generator writes **`apiClient.ts`** as a thin wrapper: it builds **`_generatedApiClient`**, exports the type **`GeneratedApiClient`**, and assigns **`apiClient = augmentApiClient(_generatedApiClient)`** via **`./apiClient.custom.ts`**.
 
-- If **`apiClient.custom.ts`** is missing, generate creates it with a default identity **`augmentApiClient<T>(base: T): T`**.
-- If it **already exists**, generate **does not overwrite it** (same idea as preserving **`client.ts`**).
+- **`apiClient.custom.ts`** is **regenerated on every run** of `api-client-generate`. It only re-exports **`augmentApiClient`** from **`./apiClient.augment.ts`**, so the import path in **`apiClient.ts`** stays stable.
+- **`apiClient.augment.ts`** holds your real **`augmentApiClient`** implementation. It is **created if missing** and **never overwritten** (same idea as preserving **`client.ts`**). Put overrides, bypasses, and extra methods there without touching **`contexts/*.ts`**.
 
-Edit **`apiClient.custom.ts`** to override or wrap specific context methods (bypass odd OpenAPI shapes, custom parsing, raw **`client`** calls) without touching regenerated **`contexts/*.ts`**.
+On the first run after this layout exists, if you still had a **legacy** single file **`apiClient.custom.ts`** with an inline **`augmentApiClient`**, the generator copies that content into **`apiClient.augment.ts`** once, then replaces **`apiClient.custom.ts`** with the stub.
 
-When you need the generated client type, use **`import type { GeneratedApiClient } from "./apiClient.js"`** from inside **`apiClient.custom.ts`** — stick to **`import type`** so you do not create a runtime circular dependency between the two modules.
+If your **`apiClient.augment.ts`** still uses a generic `` `<T>(base: T): T` `` signature from an older scaffold, replace it with the typed signature above (or delete **`apiClient.augment.ts`** once and regenerate so a fresh typed scaffold is created—only if you have no custom code to keep).
 
-**`api-client-verify`** hashes **`apiClient.custom.ts`** together with the rest of the client output. After you change it, run **`api-client-generate`** again so **`api-client.manifest.json`** picks up the new **`clientHash`**.
+When you need the generated client type, the scaffold already uses **`import type { GeneratedApiClient } from "./apiClient.js"`** so **`base`** and the return type are fully typed per context and method. Use **`import type` only** for any extra types from **`apiClient.js`** so you avoid a runtime circular dependency.
+
+**`api-client-verify`** hashes **`apiClient.custom.ts`** and **`apiClient.augment.ts`**. After you change **`apiClient.augment.ts`**, run **`api-client-generate`** again so **`api-client.manifest.json`** picks up the new **`clientHash`**.
 
 The generated **`index.ts`** also re-exports **`GeneratedApiClient`** for use elsewhere in your app.
 

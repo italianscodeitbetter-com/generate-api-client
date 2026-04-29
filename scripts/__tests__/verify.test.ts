@@ -71,8 +71,8 @@ describe("verify", () => {
     );
   });
 
-  it("fails when apiClient.custom.ts was modified", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "verify-custom-modified-"));
+  it("fails when apiClient.augment.ts was modified", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "verify-augment-modified-"));
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
     execSync(
@@ -80,9 +80,9 @@ describe("verify", () => {
       { cwd: dir },
     );
 
-    const customPath = join(dir, "api", "apiClient.custom.ts");
-    const content = readFileSync(customPath, "utf-8");
-    writeFileSync(customPath, `${content}\n// manual edit`);
+    const augmentPath = join(dir, "api", "apiClient.augment.ts");
+    const content = readFileSync(augmentPath, "utf-8");
+    writeFileSync(augmentPath, `${content}\n// manual edit`);
 
     await expect(verify({ cwd: dir })).rejects.toThrow(
       "Generated client files were modified. Run `npm run generate` to regenerate.",

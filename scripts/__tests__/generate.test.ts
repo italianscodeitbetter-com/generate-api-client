@@ -162,7 +162,7 @@ describe("generate manifest", () => {
     expect(manifest.docsHash).toBe(computedDocsHash);
   });
 
-  it("creates apiClient.custom.ts scaffold and wires augmentApiClient in apiClient.ts", () => {
+  it("creates apiClient.custom.ts stub, apiClient.augment.ts scaffold, and wires augmentApiClient in apiClient.ts", () => {
     const dir = mkdtempSync(join(tmpdir(), "generate-api-custom-"));
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
@@ -171,8 +171,11 @@ describe("generate manifest", () => {
     });
 
     const customPath = join(dir, "api", "apiClient.custom.ts");
+    const augmentPath = join(dir, "api", "apiClient.augment.ts");
     expect(existsSync(customPath)).toBe(true);
-    expect(readFileSync(customPath, "utf-8")).toContain("augmentApiClient");
+    expect(existsSync(augmentPath)).toBe(true);
+    expect(readFileSync(customPath, "utf-8")).toContain("apiClient.augment.js");
+    expect(readFileSync(augmentPath, "utf-8")).toContain("GeneratedApiClient");
 
     const apiClientTs = readFileSync(join(dir, "api", "apiClient.ts"), "utf-8");
     expect(apiClientTs).toContain('import { augmentApiClient } from "./apiClient.custom.js"');
@@ -180,7 +183,7 @@ describe("generate manifest", () => {
     expect(apiClientTs).toContain("augmentApiClient(_generatedApiClient)");
   });
 
-  it("does not overwrite apiClient.custom.ts when it already exists", () => {
+  it("does not overwrite apiClient.augment.ts when it already exists", () => {
     const dir = mkdtempSync(join(tmpdir(), "generate-api-custom-preserve-"));
     const scriptPath = join(projectRoot, "scripts", "generate.ts");
     const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
@@ -188,17 +191,20 @@ describe("generate manifest", () => {
       cwd: dir,
     });
 
-    const customPath = join(dir, "api", "apiClient.custom.ts");
+    const augmentPath = join(dir, "api", "apiClient.augment.ts");
     writeFileSync(
-      customPath,
-      `${readFileSync(customPath, "utf-8")}\n// USER_CUSTOM_SENTINEL\n`,
+      augmentPath,
+      `${readFileSync(augmentPath, "utf-8")}\n// USER_AUGMENT_SENTINEL\n`,
     );
 
     execSync(`"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`, {
       cwd: dir,
     });
 
-    expect(readFileSync(customPath, "utf-8")).toContain("USER_CUSTOM_SENTINEL");
+    expect(readFileSync(augmentPath, "utf-8")).toContain("USER_AUGMENT_SENTINEL");
+    expect(readFileSync(join(dir, "api", "apiClient.custom.ts"), "utf-8")).toContain(
+      "apiClient.augment.js",
+    );
   });
 
   it("extracts response schema from OpenAPI 3.0 content (application/json)", async () => {
