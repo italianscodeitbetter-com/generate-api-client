@@ -23,11 +23,12 @@ export function normalizedJsonHash(obj: unknown): string {
   return createHash("sha256").update(str).digest("hex");
 }
 
-/** Deterministic file list for client hash: types/index.ts, client.ts, apiClient.ts, index.ts, contexts/*.ts (sorted) */
+/** Deterministic file list for client hash: types/index.ts, client.ts, apiClient.ts, apiClient.custom.ts, index.ts, contexts/*.ts (sorted) */
 const CLIENT_FILE_ORDER = [
   "types/index.ts",
   "client.ts",
   "apiClient.ts",
+  "apiClient.custom.ts",
   "index.ts",
 ];
 

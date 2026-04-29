@@ -110,13 +110,15 @@ The generator creates an `api/` folder and a local manifest (`api-client.manifes
 
 ```
 api/
-├── client.ts          # Axios instance + single auth mode + optional token refresh
-├── types/index.ts     # TypeScript interfaces from schema definitions
-├── contexts/          # One file per API context (tag)
+├── client.ts              # Axios instance + single auth mode + optional token refresh
+├── apiClient.ts           # Nested apiClient (generated; imports apiClient.custom.ts)
+├── apiClient.custom.ts    # augmentApiClient hook — created if missing, never overwritten
+├── types/index.ts         # TypeScript interfaces from schema definitions
+├── contexts/              # One file per API context (tag)
 │   ├── allegati.ts
 │   ├── articolo.ts
 │   └── ...
-└── index.ts           # Re-exports all contexts and types
+└── index.ts               # Re-exports client, apiClient, types, contexts
 ```
 
 ### Hash verification
@@ -136,6 +138,21 @@ When you run your build, it:
 > Generated client files were modified. Run `npm run generate` to regenerate.
 
 **If manifest is missing:** Run `npm run generate` first (e.g. after a fresh clone).
+
+### Extending `apiClient` (`apiClient.custom.ts`)
+
+The generator writes **`apiClient.ts`** as a thin wrapper: it builds **`_generatedApiClient`**, exports the type **`GeneratedApiClient`**, and assigns **`apiClient = augmentApiClient(_generatedApiClient)`** from **`./apiClient.custom.ts`**.
+
+- If **`apiClient.custom.ts`** is missing, generate creates it with a default identity **`augmentApiClient<T>(base: T): T`**.
+- If it **already exists**, generate **does not overwrite it** (same idea as preserving **`client.ts`**).
+
+Edit **`apiClient.custom.ts`** to override or wrap specific context methods (bypass odd OpenAPI shapes, custom parsing, raw **`client`** calls) without touching regenerated **`contexts/*.ts`**.
+
+When you need the generated client type, use **`import type { GeneratedApiClient } from "./apiClient.js"`** from inside **`apiClient.custom.ts`** — stick to **`import type`** so you do not create a runtime circular dependency between the two modules.
+
+**`api-client-verify`** hashes **`apiClient.custom.ts`** together with the rest of the client output. After you change it, run **`api-client-generate`** again so **`api-client.manifest.json`** picks up the new **`clientHash`**.
+
+The generated **`index.ts`** also re-exports **`GeneratedApiClient`** for use elsewhere in your app.
 
 ### Authentication (`client.ts`)
 

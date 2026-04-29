@@ -1500,6 +1500,17 @@ export function generateClient(
   return buildClientTypeScript(baseUrl, o);
 }
 
+const API_CLIENT_CUSTOM_FILENAME = "apiClient.custom.ts";
+
+function generateApiClientCustomScaffold(): string {
+  return `// Customize the generated apiClient (overrides, bypasses). This file is not overwritten by the generator.
+
+export function augmentApiClient<T>(base: T): T {
+  return base;
+}
+`;
+}
+
 function generateApiClient(contextTags: string[]): string {
   const entries = contextTags.map((t) => ({
     file: sanitizeContextName(t),
@@ -1511,10 +1522,15 @@ function generateApiClient(contextTags: string[]): string {
   const props = entries.map((e) => `  ${e.id}`).join(",\n");
   return `// Auto-generated nested API client
 ${imports}
+import { augmentApiClient } from "./apiClient.custom.js";
 
-export const apiClient = {
+const _generatedApiClient = {
 ${props},
 };
+
+export type GeneratedApiClient = typeof _generatedApiClient;
+
+export const apiClient = augmentApiClient(_generatedApiClient);
 `;
 }
 
@@ -1524,6 +1540,7 @@ function generateIndex(contextTags: string[], auth: ClientAuthMode): string {
     clientExports,
     typeExports,
     'export { apiClient } from "./apiClient.js";',
+    'export type { GeneratedApiClient } from "./apiClient.js";',
     'export * from "./types/index.js";',
     "",
   ];
@@ -1642,6 +1659,12 @@ async function main(): Promise<void> {
     writeFileSync(join(contextsDir, `${ctxName}.ts`), content);
   }
 
+  const apiClientCustomPath = join(outDir, API_CLIENT_CUSTOM_FILENAME);
+  const apiClientCustomExisted = existsSync(apiClientCustomPath);
+  if (!apiClientCustomExisted) {
+    writeFileSync(apiClientCustomPath, generateApiClientCustomScaffold());
+  }
+
   writeFileSync(join(outDir, "apiClient.ts"), generateApiClient(sortedTags));
   writeFileSync(join(outDir, "index.ts"), generateIndex(sortedTags, auth));
 
@@ -1667,6 +1690,9 @@ async function main(): Promise<void> {
     }`,
   );
   console.log(`  - apiClient.ts`);
+  console.log(
+    `  - ${API_CLIENT_CUSTOM_FILENAME}${apiClientCustomExisted ? " (left unchanged)" : " (created)"}`,
+  );
   console.log(`  - contexts/*.ts (${sortedTags.length} files)`);
   console.log(`  - index.ts`);
   console.log(`  - manifest: ${manifestPath}`);

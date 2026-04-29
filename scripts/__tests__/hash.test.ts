@@ -46,6 +46,10 @@ describe("hash utilities", () => {
         writeFileSync(join(typesDir, "index.ts"), "export interface X {}");
         writeFileSync(join(dir, "client.ts"), "export const client = {}");
         writeFileSync(join(dir, "apiClient.ts"), "export const api = {}");
+        writeFileSync(
+          join(dir, "apiClient.custom.ts"),
+          "export function augmentApiClient<T>(base: T): T { return base; }\n",
+        );
         writeFileSync(join(dir, "index.ts"), "export * from './client'");
         writeFileSync(join(contextsDir, "items.ts"), "export const items = {}");
 
@@ -67,6 +71,10 @@ describe("hash utilities", () => {
         writeFileSync(join(typesDir, "index.ts"), "export interface X {}");
         writeFileSync(join(dir, "client.ts"), "export const client = {}");
         writeFileSync(join(dir, "apiClient.ts"), "export const api = {}");
+        writeFileSync(
+          join(dir, "apiClient.custom.ts"),
+          "export function augmentApiClient<T>(base: T): T { return base; }\n",
+        );
         writeFileSync(join(dir, "index.ts"), "export * from './client'");
         writeFileSync(join(contextsDir, "items.ts"), "export const items = {}");
 

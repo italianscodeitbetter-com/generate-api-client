@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execSync } from "child_process";
-import { mkdtempSync, readFileSync, existsSync } from "fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { fileURLToPath } from "url";
@@ -160,6 +160,45 @@ describe("generate manifest", () => {
     const fixtureSpec = JSON.parse(readFileSync(fixturePath, "utf-8"));
     const computedDocsHash = normalizedJsonHash(fixtureSpec);
     expect(manifest.docsHash).toBe(computedDocsHash);
+  });
+
+  it("creates apiClient.custom.ts scaffold and wires augmentApiClient in apiClient.ts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "generate-api-custom-"));
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(`"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`, {
+      cwd: dir,
+    });
+
+    const customPath = join(dir, "api", "apiClient.custom.ts");
+    expect(existsSync(customPath)).toBe(true);
+    expect(readFileSync(customPath, "utf-8")).toContain("augmentApiClient");
+
+    const apiClientTs = readFileSync(join(dir, "api", "apiClient.ts"), "utf-8");
+    expect(apiClientTs).toContain('import { augmentApiClient } from "./apiClient.custom.js"');
+    expect(apiClientTs).toContain("export type GeneratedApiClient");
+    expect(apiClientTs).toContain("augmentApiClient(_generatedApiClient)");
+  });
+
+  it("does not overwrite apiClient.custom.ts when it already exists", () => {
+    const dir = mkdtempSync(join(tmpdir(), "generate-api-custom-preserve-"));
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(`"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`, {
+      cwd: dir,
+    });
+
+    const customPath = join(dir, "api", "apiClient.custom.ts");
+    writeFileSync(
+      customPath,
+      `${readFileSync(customPath, "utf-8")}\n// USER_CUSTOM_SENTINEL\n`,
+    );
+
+    execSync(`"${tsxPath}" "${scriptPath}" --url "${fixturePath}" --out api`, {
+      cwd: dir,
+    });
+
+    expect(readFileSync(customPath, "utf-8")).toContain("USER_CUSTOM_SENTINEL");
   });
 
   it("extracts response schema from OpenAPI 3.0 content (application/json)", async () => {
