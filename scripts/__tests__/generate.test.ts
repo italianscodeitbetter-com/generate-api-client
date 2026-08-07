@@ -88,6 +88,13 @@ const openapi3DanglingResponseRefFixturePath = join(
   "fixtures",
   "openapi3-dangling-response-ref.json",
 );
+const openapi2StringifiedKeysFixturePath = join(
+  projectRoot,
+  "scripts",
+  "__tests__",
+  "fixtures",
+  "openapi2-stringified-keys.json",
+);
 
 describe("generate manifest", () => {
   let tempDir: string;
@@ -292,6 +299,35 @@ describe("generate manifest", () => {
     );
     expect(adminContext).toContain("client.get<unknown>");
     expect(adminContext).not.toContain("HealthResponse");
+  });
+
+  it("stringifies special-character keys and emits a template-literal index signature for <…> query params", async () => {
+    const scriptPath = join(projectRoot, "scripts", "generate.ts");
+    const tsxPath = join(projectRoot, "node_modules", ".bin", "tsx");
+    execSync(
+      `"${tsxPath}" "${scriptPath}" --url "${openapi2StringifiedKeysFixturePath}" --out api-stringified-keys`,
+      { cwd: tempDir },
+    );
+
+    const registryContext = readFileSync(
+      join(tempDir, "api-stringified-keys", "contexts", "registry.ts"),
+      "utf-8",
+    );
+    // dynamic field.<nome> param becomes a template-literal index signature, not a literal/broken key
+    expect(registryContext).toContain("[key: `field.${string}`]: string | string[]");
+    expect(registryContext).toContain("search?: string");
+    expect(registryContext).not.toContain("field.<nome>?:");
+    expect(registryContext).not.toContain('"field.<nome>"');
+
+    const types = readFileSync(
+      join(tempDir, "api-stringified-keys", "types", "index.ts"),
+      "utf-8",
+    );
+    // special-character interface keys are quoted; valid identifiers stay bare
+    expect(types).toContain('"with.dot": string;');
+    expect(types).toContain('"with space"?: string;');
+    expect(types).toMatch(/\n\s*normal\?: string;/);
+    expect(types).not.toContain("with.dot:");
   });
 
   it("extracts body and response from OpenAPI 2.0 (parameters in:body, responses.schema)", async () => {

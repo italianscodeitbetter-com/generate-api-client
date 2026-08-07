@@ -724,7 +724,7 @@ function schemaToTsType(
             }
           : undefined;
         const t = schemaToTsType(propSchema, definitions, refsSeen, childCtx);
-        return `  ${k}${optional ? "?" : ""}: ${t};`;
+        return `  ${formatPropertyKey(k)}${optional ? "?" : ""}: ${t};`;
       });
       const obj = `{\n${props.join("\n")}\n}`;
       return nullable ? `${obj} | null` : obj;
@@ -806,7 +806,7 @@ function generateTypes(definitions: Record<string, SchemaObject>): string {
         if (desc) {
           props.push(`  /** ${jsdocEscape(desc)} */`);
         }
-        props.push(`  ${propName}${optional ? "?" : ""}: ${t};`);
+        props.push(`  ${formatPropertyKey(propName)}${optional ? "?" : ""}: ${t};`);
       }
     }
 
@@ -1164,6 +1164,17 @@ function sanitizeIdentifier(name: string): string {
     .replace(/[^a-zA-Z0-9_]/g, "_");
 }
 
+/** Render an object key in a TS type: bare if a valid JS identifier, else a quoted+escaped string literal. */
+function formatPropertyKey(key: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
+}
+
+/** "field.<nome>" -> "field.${string}" (literal). Returns null if the name has no <…> placeholder. */
+function dynamicQueryKeyPattern(name: string): string | null {
+  if (!name.includes("<")) return null;
+  return name.replace(/<[^>]*>/g, "${string}"); // plain string — emits literal ${string}, not interpolated
+}
+
 /** Escape text for use inside JSDoc (avoid closing comment, handle newlines) */
 function jsdocEscape(text: string): string {
   return text.replace(/\*\//g, "* /").replace(/\n/g, " ").trim();
@@ -1295,16 +1306,25 @@ function generateContextFile(
     const argsObjectProps: string[] = [];
     if (op.pathParams.length > 0) {
       argsObjectProps.push(
-        `params: { ${op.pathParams.map((p) => `${p.name}: string | number`).join("; ")} }`,
+        `params: { ${op.pathParams.map((p) => `${formatPropertyKey(p.name)}: string | number`).join("; ")} }`,
       );
     }
     if (op.queryParams.length > 0) {
-      const queryInner = op.queryParams
-        .map(
-          (q) =>
-            `${q.name}${q.required ? "" : "?"}: ${schemaToTsType(q.schema, definitions)}`,
-        )
-        .join("; ");
+      const named: string[] = [];
+      const dynamic = new Set<string>();
+      for (const q of op.queryParams) {
+        const vt = schemaToTsType(q.schema, definitions);
+        const pattern = dynamicQueryKeyPattern(q.name);
+        if (pattern) {
+          // string-concat keeps the backticks and ${string} literal in the emitted output
+          dynamic.add("[key: `" + pattern + "`]: " + vt + " | " + vt + "[]");
+        } else {
+          named.push(
+            `${formatPropertyKey(q.name)}${q.required ? "" : "?"}: ${vt}`,
+          );
+        }
+      }
+      const queryInner = [...named, ...dynamic].join("; ");
       const queryKey = op.queryParams.some((q) => q.required)
         ? "query"
         : "query?";

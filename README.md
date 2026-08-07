@@ -206,6 +206,27 @@ The generated client includes JSDoc comments from the OpenAPI spec:
 - **Params**: `@param` with descriptions for path params, query params, and body
 - **Types**: Interface and property descriptions when present in the schema
 
+### Property keys and dynamic query params
+
+Object keys in generated types (interface properties, query/path params) are emitted as **quoted string literals** when the name is not a valid JS identifier (it contains a `.`, space, `-`, etc.), so the output is always valid TypeScript:
+
+```typescript
+export interface Example {
+  id: number;            // valid identifier — left bare
+  "field.area"?: string; // special characters — quoted
+}
+```
+
+Query parameters whose name is a **`<…>` placeholder** (e.g. `field.<nome>`, used by some specs to document dynamic filters like `field.area`, `field.area__gte`) are modeled as a **template-literal index signature** instead of a literal key, so any matching key type-checks and repeated values (OR filters) are allowed:
+
+```typescript
+await apiClient.registry.list({
+  query: { search: "abc", "field.area": "1", "field.pressione": ["2", "3"] },
+});
+// generated query type:
+//   query?: { search?: string; /* … */ [key: `field.${string}`]: string | string[] }
+```
+
 ### File uploads (`multipart/form-data`)
 
 OpenAPI 3 operations whose `requestBody` uses **`multipart/form-data`** with a flat object schema are generated to accept a typed **`data`** object and **build `FormData` inside the method** (so axios sends the correct multipart body and boundary). Properties with **`format: binary`** are typed as **`Blob | File`**; other scalar parts are appended as strings. Arrays of binary parts (array of `string` + `format: binary`) are supported as repeated `append` calls.

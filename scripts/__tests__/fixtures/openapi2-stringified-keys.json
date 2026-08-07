@@ -1,0 +1,50 @@
+{
+  "swagger": "2.0",
+  "info": { "title": "Stringified Keys API", "version": "1.0.0" },
+  "host": "api.example.com",
+  "basePath": "/api",
+  "schemes": ["https"],
+  "paths": {
+    "/registry/": {
+      "get": {
+        "operationId": "registry_list",
+        "summary": "List registries with dynamic field filters",
+        "parameters": [
+          { "name": "search", "in": "query", "required": false, "type": "string" },
+          {
+            "name": "field.<nome>",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Dynamic filter: field.<nome>=<valore> (e.g. field.area=1). Repeat for OR."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "schema": { "$ref": "#/definitions/Registry" }
+          }
+        },
+        "tags": ["registry"]
+      }
+    }
+  },
+  "definitions": {
+    "Registry": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "integer" },
+        "name": { "type": "string" }
+      }
+    },
+    "Weird": {
+      "type": "object",
+      "required": ["with.dot"],
+      "properties": {
+        "normal": { "type": "string" },
+        "with.dot": { "type": "string" },
+        "with space": { "type": "string" }
+      }
+    }
+  }
+}
